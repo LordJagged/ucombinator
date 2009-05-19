@@ -253,7 +253,7 @@ object LambdoSyntax {
   }
   
   
-  private [lambdo] implicit def varToOrdered(v : Var) : Ordered[Var] = new Ordered[Var] {
+  private [languages] implicit def varToOrdered(v : Var) : Ordered[Var] = new Ordered[Var] {
     def compare (v2 : Var) : Int = v compare v2
   }
 
