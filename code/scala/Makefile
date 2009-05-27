@@ -1,10 +1,12 @@
-# The U Combinator build script.
+# The U Combinator public library
 
-WINTITLE="U Combinator library"
+WINTITLE="U Combinator"
 
-# Binaries.
+# Toolchain.
 SCALAC=scalac
 SCALA=scala
+SCALADOC=scaladoc
+
 
 # Directories.
 SRC=src
@@ -12,45 +14,47 @@ BIN=bin
 LIB=lib
 DOC=doc
 
-UCDIR=$(LIB)/org/ucombinator
-LANGDIR=$(UCDIR)/lang
-UTILDIR=$(UCDIR)/util
-CPSDIR=$(UTILDIR)/cps
-LANGUAGESDIR=$(UCDIR)/languages
-SEXPDIR=$(LANGUAGESDIR)/sexp
-
 
 # Principal files.
-SEXPCLASS=$(SEXPDIR)/SExp.class
-SYNTAXNODECLASS=$(LANGUAGESDIR)/SyntaxNode.class 
-EXTENSIBLECLASS=$(LANGDIR)/Extensible.class
-CPSUTILCLASS=$(CPSDIR)/CPSUtil.class
+SCALA_FILES=$(shell find $(SRC) -name '*.scala')
+CLASS_FILES=$(patsubst src/%,lib/%,$(SCALA_FILES:.scala=.class))
+
 DOCINDEX=$(DOC)/index.html
+
+# Commands
+SC=$(SCALAC) -d $(LIB)
+
+
+# Top-level rules.
+.PHONY: default
+default: all
+
+.PHONY: all
+all: $(CLASS_FILES) $(DOCINDEX)
+
+.PHONY: force
+force: # Forcibly rebuild everything.
+	$(SC) $(SCALA_FILES)
 
 
 # Build rules.
-all: $(DOCINDEX) $(SEXPCLASS) $(SYNTAXNODECLASS) $(CPSUTILCLASS)
+$(CLASS_FILES): $(SCALA_FILES)
+	@echo Compiling modified files: $(notdir $?)
+	$(SC) $?
+	touch $(CLASS_FILES)
 
-$(DOCINDEX): $(SRC)/*.scala
-	scaladoc -windowtitle $(WINTITLE) -d $(DOC) $(SRC)/*.scala
+#lib/%.class: src/%.scala
+#	$(SC) $<
 
-$(SEXPCLASS): $(SRC)/SExp.scala
-	$(SCALAC) -d $(LIB) $(SRC)/SExp.scala
-
-$(SYNTAXNODECLASS): $(SRC)/SyntaxNode.scala $(EXTENSIBLECLASS)
-	$(SCALAC) -d $(LIB) $(SRC)/SyntaxNode.scala
-
-$(EXTENSIBLECLASS): $(SRC)/Extensible.scala
-	$(SCALAC) -d $(LIB) $(SRC)/Extensible.scala
-
-$(CPSUTILCLASS): $(SRC)/CPSUtil.scala
-	$(SCALAC) -d $(LIB) $(SRC)/CPSUtil.scala
+$(DOCINDEX): $(SCALA_FILES)
+	$(SCALADOC) -windowtitle $(WINTITLE) -d $(DOC) $^
 
 
 
 # Clean up rules.
+.PHONY: clean
 clean:
-	rm -rf $(BIN)/* $(LIB)/* $(DOC)/*
+	rm -rf $(LIB)/* $(DOC)/*
 
 
 

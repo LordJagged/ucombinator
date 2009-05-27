@@ -1,5 +1,7 @@
 package org.ucombinator.lang ;
 
+import scala.collection.mutable.HashMap ;
+
 /**
 
   An Extensible object can store arbitrary properties.
@@ -21,5 +23,5 @@ trait Extensible {
    When an implicit is used to extend the interface of an object, 
    it can store local information in the __properties HashMap.
    */
-  lazy val __properties = new scala.collection.mutable.HashMap[Any,Any]() 
+  lazy val __properties = new HashMap[Any,Any]() 
 }

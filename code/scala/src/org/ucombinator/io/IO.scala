@@ -1,4 +1,4 @@
-package org.ucombinator.scala.io ;
+package org.ucombinator.io ;
 
 
 /**
