@@ -1,3 +1,0 @@
-#!/bin/bash
-
-scala -cp bin:../../code/scala/lib org.ucombinator.project.lambdo.Lambdo $*

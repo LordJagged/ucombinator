@@ -1,0 +1,9 @@
+
+MAKE_DIRS=$(shell ls */Makefile)
+
+
+all:
+	@for d in $(dir $(MAKE_DIRS)); do echo compiling: $$d; cd $$d; make; cd .. ; done
+
+clean:
+	@for d in $(dir $(MAKE_DIRS)); do echo cleaning: $$d; cd $$d; make clean; cd .. ; done
