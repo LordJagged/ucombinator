@@ -9,11 +9,11 @@ SCALADOC=scaladoc
 
 # Directories.
 SRC=src
-BIN=bin
 DOC=doc
-CP=$(BIN):../../code/scala/lib
+LIB=lib
+CP=$(LIB):../../code/scala/lib
 
-UCDIR=$(BIN)/org/ucombinator
+UCDIR=$(LIB)/org/ucombinator
 PROJECTDIR=$(UCDIR)/project
 LAMBDODIR=$(PROJECTDIR)/lambdo
 
@@ -44,16 +44,16 @@ $(DOCINDEX): $(SRC)/*.scala
 	$(SCALADOC) -cp $(CP) -d doc -windowtitle $(WINTITLE) $(SRC)/*
 
 $(LAMBDOCLASS): $(SRC)/Lambdo.scala
-	$(SCALAC) -cp $(CP) -d $(BIN) $(SRC)/Lambdo.scala
+	$(SCALAC) -cp $(CP) -d $(LIB) $(SRC)/Lambdo.scala
 
 $(CPSTRANSFORMERCLASS): $(SRC)/CPSTransformer.scala
-	$(SCALAC) -cp $(CP) -d $(BIN) $(SRC)/CPSTransformer.scala
+	$(SCALAC) -cp $(CP) -d $(LIB) $(SRC)/CPSTransformer.scala
 
 $(UNDEFINERCLASS): $(SRC)/Undefiner.scala
-	$(SCALAC) -cp $(CP) -d $(BIN) $(SRC)/Undefiner.scala
+	$(SCALAC) -cp $(CP) -d $(LIB) $(SRC)/Undefiner.scala
 
 $(ANORMALIZERCLASS): $(SRC)/ANormalizer.scala
-	$(SCALAC) -cp $(CP) -d $(BIN) $(SRC)/ANormalizer.scala
+	$(SCALAC) -cp $(CP) -d $(LIB) $(SRC)/ANormalizer.scala
 
 
 
@@ -61,7 +61,7 @@ $(ANORMALIZERCLASS): $(SRC)/ANormalizer.scala
 # Clean up rules.
 clean:
 	fsc -shutdown
-	rm -rf $(BIN)/* $(DOC)/*
+	rm -rf $(LIB)/* $(DOC)/*
 
 
 

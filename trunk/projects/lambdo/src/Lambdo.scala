@@ -2,6 +2,7 @@ package org.ucombinator.project.lambdo ;
 
 import org.ucombinator.languages.{SyntaxNode,AlphaSyntaxNode} ;
 import org.ucombinator.languages.sexp.{SExp,SExpSyntax,SParser} ;
+import org.ucombinator.languages.json.{JSONable,JSONExp,JSONSyntax} ;
 
 
 import scala.collection.immutable.{SortedMap,TreeMap} ;
@@ -216,7 +217,7 @@ object LambdoSyntax {
   /**
    A Term is an abstract syntax tree node.
    */
-  abstract class Term extends SyntaxNode {
+  abstract class Term extends SyntaxNode with JSONable {
 
     /**
      The original source of this Term, if any.
@@ -238,6 +239,7 @@ object LambdoSyntax {
 
     override def toString = toSExp.toString
 
+    def toJSON() : JSONExp = JSONSyntax.T(this.toString)
   }
 
   /* Denoters. */
@@ -253,7 +255,7 @@ object LambdoSyntax {
   }
   
   
-  private [languages] implicit def varToOrdered(v : Var) : Ordered[Var] = new Ordered[Var] {
+  private [project] implicit def varToOrdered(v : Var) : Ordered[Var] = new Ordered[Var] {
     def compare (v2 : Var) : Int = v compare v2
   }
 
@@ -332,29 +334,50 @@ object LambdoSyntax {
     def rhs : Exp = value
   }
 
+
+
+
+
   /* Expressions */
+
+  /**
+   The evaluation of a trivial expression is guaranteed to terminate,
+   mutates no existing resource, and performs no I/O.
+   */
+  trait TrivialExp extends Exp
 
   /**
    An Exp object represents an evaluable term.
    */
+  type FreeSet = scala.collection.immutable.Set[Var]
+
   abstract class Exp extends Term {
     override def setSource (sx : SExp) : Exp = super.setSource(sx).asInstanceOf[Exp]
+
+    def freeVars : FreeSet = throw new Exception("freeVars() not yet implemented in " + this.getClass().getName())
   }
+  
+  private def freeVarsIn(exps : List[Exp]) : FreeSet = 
+    (exps.map(_.freeVars).foldRight (scala.collection.immutable.Set[Var]()) (_ ++ _))
 
   // Core:
 
   /**
    A Lambda expression, upon evaluation, becomes a function.
    */
-  case class Lambda (params : List[Var], body : Exp) extends Exp {
+  case class Lambda (val params : List[Var], val body : Exp) extends TrivialExp {
     def toSExp = L(List(S("lambda"), L(params map (v => S(v.name))), body.toSExp))
+    
+    override lazy val freeVars : FreeSet = body.freeVars -- params
   }
 
   /**
    A Ref expression evaluates to the current value of the variable.
    */
-  case class Ref (val v : Var) extends Exp {
+  case class Ref (val v : Var) extends TrivialExp {
     def toSExp = S(v.name)
+
+    override lazy val freeVars : FreeSet = scala.collection.immutable.TreeSet[Var]() + v
   }
 
   /**
@@ -362,6 +385,8 @@ object LambdoSyntax {
    */
   case class App (f : Exp, args : List[Exp]) extends Exp {
     def toSExp = L(f.toSExp :: (args map (_.toSExp)))
+
+    override lazy val freeVars : FreeSet = f.freeVars ++ freeVarsIn(args)
   }
 
   /**
@@ -369,6 +394,8 @@ object LambdoSyntax {
    */
   case class OrPar(conds : List[Exp]) extends Exp {
     def toSExp = L(S("or||") :: (conds map (_.toSExp)))
+
+    override lazy val freeVars : FreeSet = freeVarsIn(conds)
   }
 
   /**
@@ -376,6 +403,8 @@ object LambdoSyntax {
    */
   case class AndPar(conds : List[Exp]) extends Exp {
     def toSExp = L(S("and||") :: (conds map (_.toSExp)))
+
+    override lazy val freeVars : FreeSet = freeVarsIn(conds)
   }
 
   /**
@@ -393,6 +422,7 @@ object LambdoSyntax {
    */
   case class If (cond : Exp, ifTrue : Exp, ifFalse : Exp) extends Exp {
     def toSExp = L(List(S("if"), cond.toSExp, ifTrue.toSExp, ifFalse.toSExp))
+    override lazy val freeVars : FreeSet = freeVarsIn(List(cond,ifTrue,ifFalse))
   }
 
   /**
@@ -400,6 +430,7 @@ object LambdoSyntax {
    */
   case class Let1(v : Var, value : Exp, body : Exp) extends Exp {
     def toSExp = L(List(S("let"), L(List(L(List(S(v.name), value.toSExp)))), body.toSExp))
+    override lazy val freeVars : FreeSet = value.freeVars ++ (body.freeVars - v)
   }
 
   /**
@@ -407,6 +438,8 @@ object LambdoSyntax {
    */
   case class LetRec(names : List[Var], values : List[Lambda], body : Exp) extends Exp {
     def toSExp = L(List(S("letrec"), L((names zip values) map { case (n,v) => L(List(S(n.name),v.toSExp)) }), body.toSExp))
+
+    override lazy val freeVars : FreeSet = (freeVarsIn(values) ++ body.freeVars) -- names
   }
 
   /**
@@ -414,6 +447,8 @@ object LambdoSyntax {
    */
   case class Set(v : Var, value : Exp, body : Exp) extends Exp {
     def toSExp = L(List(S("set"), S(v.name), value.toSExp, body.toSExp))
+    
+    override lazy val freeVars : FreeSet = (body.freeVars ++ value.freeVars) + v
   }
 
   /**
@@ -422,6 +457,8 @@ object LambdoSyntax {
    */
   case class Seq(exps : List[Exp]) extends Exp {
     def toSExp = L(S("begin") :: (exps map (_.toSExp)))
+
+    override lazy val freeVars : FreeSet = freeVarsIn(exps) 
   }
 
   // Real sugar:
@@ -507,10 +544,16 @@ object LambdoSyntax {
       }
   }
 
+
+
+
+
   /**
    A LitExp object represents literal constant expression.
    */
-  trait LitExp 
+  trait LitExp extends TrivialExp {
+    override val freeVars = scala.collection.immutable.Set[Var]()
+  }
 
   /**
    A VoidLit expression evaluates to the void value.
@@ -550,6 +593,8 @@ object LambdoSyntax {
    */
   abstract class PrimOp extends Exp {
     def p : String
+
+    override val freeVars : FreeSet = scala.collection.immutable.Set[Var]()
   }
   /**
    An EPrimOp is a side-effecting primitive.
@@ -677,16 +722,18 @@ object LambdoSyntax {
           Let1(parseVar(names.head), parseExp(values.head), parse (names.tail,values.tail,body))
       parse (names,values,body)
     }
-    case SLet(names,values,body) => 
-      App(Lambda(names map parseVar,parseExp(body)), values map parseExp)
     case SLet1(name, value, body) =>
       Let1(parseVar(name), parseExp(value), parseExp(body))
+    case SLet(names,values,body) => 
+      App(Lambda(names map parseVar,parseExp(body)), values map parseExp)
     case SSet(name, value, Some(body)) =>
       Set(parseVar(name), parseExp(value), parseExp(body))
     case SSet(name, value, None) =>
       Set(parseVar(name), parseExp(value), VoidLit())
     case SBegin(exps) =>
       Seq(exps map parseExp)
+    
+    case L(S("let") :: args) => throw new Exception("Compiler bug; could not properly parse: " + sx)
 
     case L(f :: args) => App(parseExp(f), args map parseExp)
     case L(List()) => NilLit()
@@ -1325,6 +1372,21 @@ object Lambdo {
   }
 
 
+  def parseString (source : String) : List[LambdoSyntax.Def] = {
+    val sparser = new SParser
+    val sxs : List[SExp] = sparser.parse(source)
+    var defs : List[LambdoSyntax.Def] = sxs map LambdoSyntax.parseDef
+    defs
+  }
+
+  def parseFile (file : java.io.File) : List[LambdoSyntax.Def] = {
+    val source = scala.io.Source.fromFile(file) mkString ""
+    parseString(source)
+  }
+
+  def parseFile (file : String) : List[LambdoSyntax.Def] = {
+    parseFile(new java.io.File(file))
+  }
 
 
   def main (args : Array[String]) {

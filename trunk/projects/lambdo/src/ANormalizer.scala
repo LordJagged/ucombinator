@@ -1,7 +1,7 @@
 package org.ucombinator.project.lambdo ;
 
 
-import org.ucombinator.util.cps.{CPSUtil} ;
+import org.ucombinator.util.{CPS => CPSUtil} ;
 
 
 /**
@@ -56,13 +56,17 @@ class ANormalizer {
 
     case If (cond, ifTrue, ifFalse) => 
       tK (cond) (cond_ => 
-        tK (If (cond_, t(ifTrue), t(ifFalse))) (k))
+        letfresh (If (cond_, 
+                      t (ifTrue),
+                      t (ifFalse))) 
+                 (res_ => k(res_)))
 
     case Let1 (name, value, body) if isAtomic(value) =>
       Let1(name, value, tK (body) (k))
 
-    case Let1 (name, value, body) =>
+    case Let1 (name, value, body) => {
       Let1(name, t(value), tK (body) (k))
+    }
 
     case LetRec (names, lams, body) => 
       LetRec(names, lams map (((x : Exp) => x.asInstanceOf[Lambda]) compose t),
@@ -73,15 +77,45 @@ class ANormalizer {
            tK (body) (k))
     
     case Set (name, value, body) =>
-      letfresh (value) (value_ => 
+      tK (value) (value_ => 
         Set (name, value_, 
              tK (body) (k)))
 
-    case Seq (exps) =>
-      Seq (exps map (t(_)))
+    case Seq (List()) => 
+      k (VoidLit())
+    
+    case Seq (exps) => {
+      val last = exps.last
+      val firsts = exps.take(exps.length)
+
+      Seq ((firsts map (t(_))) ++ List((tK (last) (k))))
+    }
   }
 
-  private def t (exp : Exp) : Exp = tK (exp) (identity)
+  private def t (exp : Exp) : Exp = exp match {
+    
+    case App(po : PrimOp, args) =>
+      CPSUtil.mapK (tK) (args) (args_ =>
+        App(po, args_))
+
+    case App(f, args) => 
+      CPSUtil.mapK (tK) (f::args) (fargs_ =>
+        App(fargs_.head, fargs_.tail))
+
+    case If (cond, ifTrue, ifFalse) => 
+      tK (cond) (cond_ => 
+        (If (cond_, 
+             t (ifTrue),
+             t (ifFalse))))
+
+    case Seq(List()) => 
+      VoidLit()
+
+    case Seq(exps) => 
+      Seq(exps map (t(_)))
+    
+    case _ => tK (exp) (identity)
+  }
 
   def apply(exp : Exp) : Exp = t(exp)
 }

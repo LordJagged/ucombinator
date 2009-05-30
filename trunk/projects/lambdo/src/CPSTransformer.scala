@@ -1,7 +1,7 @@
 package org.ucombinator.project.lambdo ;
 
 import org.ucombinator.lang.{Extensible} ;
-import org.ucombinator.util.cps.{CPSUtil} ;
+import org.ucombinator.util.{CPS => CPSUtil} ;
 
 
 /**
