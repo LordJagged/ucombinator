@@ -40,29 +40,29 @@
 
 ;; Random number utilities.
 
-(define (random-char) 
-  (call-with-input-file "/dev/random" 
-    (lambda (port)
-     (read-char port))))
+;(define (random-char) 
+;  (call-with-input-file "/dev/random" 
+;    (lambda (port)
+;     (read-char port))))
 
-(define (random-num)
-  (let ((n (char->integer (random-char))))
-    (if (= n 65533)
-        (random-num)
-        n)))
+;(define (random-num)
+;  (let ((n (char->integer (random-char))))
+;    (if (= n 65533)
+;        (random-num)
+;        n)))
 
-(define (random-bit) (modulo (random-num) 2))
+;(define (random-bit) (modulo (random-num) 2))
 
-(define (random-byte) (+ (modulo (random-num) 128) (* 128 (random-bit))))
+;(define (random-byte) (+ (modulo (random-num) 128) (* 128 (random-bit))))
 
 (define (random bytes)
   (if (<= bytes 0)
       0
-      (+ (* 256 (random (- bytes 1))) (random-byte))))
+      (+ (* 256 (random (- bytes 1))) (random-byte))));
 
-(define (random-range lo hi)
-  (let ((byte-size (ceiling (/ (/ (log (- hi lo)) (log 2)) 8))))
-    (+ lo (modulo (random byte-size) (- hi lo)))))
+;(define (random-range lo hi)
+;  (let ((byte-size (ceiling (/ (/ (log (- hi lo)) (log 2)) 8))))
+;    (+ lo (modulo (random byte-size) (- hi lo)))))
 
 
 ;; Primality tests.

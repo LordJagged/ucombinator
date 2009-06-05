@@ -7,16 +7,17 @@ object TransitionSystemTesting {
   var performSanityChecks = true 
 }
 
-
+/*
 trait Node {
   def serial : Long ;
 
   override def hashCode() : Int = throw new Exception("hashCode() not implemented for Node")
   override def equals(a : Any) : Boolean = throw new Exception("equals() not implemented for Node")
 }
+*/
 
 
-trait MonotoneNode[F,S] extends Node {
+trait MonotoneNode[F,S] {
 
   /**
    Determines whether this state will be represented in the visited cache during state-space exploration.
@@ -55,7 +56,7 @@ abstract class TransitionSystem {
   /**
    Nodes are states within a transition system.
    */
-  type N <: Node
+  type N 
 
   /**
    Produces the neighboring states.

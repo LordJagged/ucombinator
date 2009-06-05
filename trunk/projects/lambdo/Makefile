@@ -23,6 +23,7 @@ LAMBDOCLASS=$(LAMBDODIR)/Lambdo.class
 CPSTRANSFORMERCLASS=$(LAMBDODIR)/CPSTransformer.class
 UNDEFINERCLASS=$(LAMBDODIR)/Undefiner.class
 ANORMALIZERCLASS=$(LAMBDODIR)/ANormalizer.class
+UNTAILERCLASS=$(LAMBDODIR)/Untailer.class
 
 
 # Make all.
@@ -35,7 +36,7 @@ runlambdo: $(LAMBDOCLASS)
 
 
 # Build rules.
-allcode: $(LAMBDOCLASS) $(CPSTRANSFORMERCLASS) $(UNDEFINERCLASS) $(ANORMALIZERCLASS)
+allcode: $(LAMBDOCLASS) $(CPSTRANSFORMERCLASS) $(UNDEFINERCLASS) $(ANORMALIZERCLASS) $(UNTAILERCLASS)
 
 alldocs: $(DOCINDEX) 
 
@@ -54,6 +55,9 @@ $(UNDEFINERCLASS): $(SRC)/Undefiner.scala
 
 $(ANORMALIZERCLASS): $(SRC)/ANormalizer.scala
 	$(SCALAC) -cp $(CP) -d $(LIB) $(SRC)/ANormalizer.scala
+
+$(UNTAILERCLASS): $(SRC)/Untailer.scala
+	$(SCALAC) -cp $(CP) -d $(LIB) $(SRC)/Untailer.scala
 
 
 
