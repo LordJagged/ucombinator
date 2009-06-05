@@ -30,14 +30,18 @@ SCALA_BIGMEM=java -Xmx1024M -Xmn1024M -cp .:/opt/local/share/java/scala-library.
 
 # Top-level rules.
 .PHONY: default
-default: all
+default: allcode
 
 .PHONY: all
 all: $(CLASS_FILES) $(DOCINDEX) $(BIN)/hofa.run
 
+.PHONY: allcode
+allcode: $(CLASS_FILES)
+
 .PHONY: force
 force: # Forcibly rebuild everything.
-	$(SC) $(SCALA_FILES)
+	@echo Compiling all files...
+	@ $(SC) -unchecked $(SCALA_FILES)
 
 .PHONY: prompt
 prompt:	
@@ -45,16 +49,20 @@ prompt:
 
 # Build rules.
 $(CLASS_FILES): $(SCALA_FILES)
-	@echo Compiling modified files: $(notdir $?)
-	$(SC) $?
-	touch $(CLASS_FILES)
+	@echo Compiling modified files only:
+	@echo " "$(notdir $?)
+	@echo " Use 'make force' to forcibly compile everything."
+	@ $(SC) $?
+	@touch $(CLASS_FILES)
 
 $(DOCINDEX): $(SCALA_FILES)
-	$(SCALADOC) -cp $(CP) -windowtitle $(WINTITLE) -d $(DOC) $^
+	@echo Generating documentation...
+	@ $(SCALADOC) -cp $(CP) -windowtitle $(WINTITLE) -d $(DOC) $^
 
 $(BIN)/hofa.run: Makefile
-	echo $(SCALA_BIGMEM) org.ucombinator.project.hofa.\$$1 \$$2* > bin/hofa.run
-	chmod u+x $(BIN)/hofa.run
+	@echo Creating hofa.run script...
+	@echo $(SCALA_BIGMEM) org.ucombinator.project.hofa.\$$1 \$$2* > bin/hofa.run
+	@chmod u+x $(BIN)/hofa.run
 
 
 

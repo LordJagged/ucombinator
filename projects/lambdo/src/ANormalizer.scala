@@ -24,6 +24,7 @@ class ANormalizer {
     case BoolLit(_) if flattenBooleans => true
     case TextLit(_) => true
     case PPrimOp(_) if flattenPrimOps => true
+    case EPrimOp(_) if flattenPrimOps => true
     case App(f,args) if (flattenPrimApps && 
                          isAtomicProcedure(f) &&
                          (args forall (isAtomic))) => true
@@ -47,12 +48,25 @@ class ANormalizer {
 
     case Lambda(params, body) => k(Lambda(params,t (body)))
 
-    case App(po : PrimOp, args) =>
+    case App(po : PPrimOp, args) =>
       CPSUtil.mapK (tK) (args) (args_ =>
         k(App(po, args_)))
 
     case App(f, args) => 
       letfresh (CPSUtil.mapK (tK) (f::args) (fargs_ => App(fargs_.head, fargs_.tail))) (k)
+
+    case Record(fields,exps) =>
+      letfresh (CPSUtil.mapK (tK) (exps) (exps_ => Record(fields,exps_))) (k)
+
+    case GetField(objexp,field) => 
+      tK (objexp) (objexp_ => k(GetField(objexp_, field)))
+    
+    case SetField(obj,field,value,body) =>
+      tK (obj) (obj_ =>
+        tK (value) (value_ =>
+          SetField(obj_,field,value_,
+                   tK (body) (k))))
+    
 
     case If (cond, ifTrue, ifFalse) => 
       tK (cond) (cond_ => 
@@ -60,9 +74,10 @@ class ANormalizer {
                       t (ifTrue),
                       t (ifFalse))) 
                  (res_ => k(res_)))
-
+    /*
     case Let1 (name, value, body) if isAtomic(value) =>
       Let1(name, value, tK (body) (k))
+    */
 
     case Let1 (name, value, body) => {
       Let1(name, t(value), tK (body) (k))
@@ -72,9 +87,11 @@ class ANormalizer {
       LetRec(names, lams map (((x : Exp) => x.asInstanceOf[Lambda]) compose t),
              tK (body) (k))
 
-    case Set (name, value, body) if isAtomic(exp) =>
+    /*
+    case Set (name, value, body) if isAtomic(value) =>
       Set (name, value, 
            tK (body) (k))
+    */
     
     case Set (name, value, body) =>
       tK (value) (value_ => 
@@ -93,8 +110,10 @@ class ANormalizer {
   }
 
   private def t (exp : Exp) : Exp = exp match {
-    
-    case App(po : PrimOp, args) =>
+
+    case _ if isAtomic(exp) => exp
+
+    case App(po : PPrimOp, args) =>
       CPSUtil.mapK (tK) (args) (args_ =>
         App(po, args_))
 

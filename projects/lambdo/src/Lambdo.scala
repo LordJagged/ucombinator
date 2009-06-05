@@ -8,6 +8,31 @@ import org.ucombinator.languages.json.{JSONable,JSONExp,JSONSyntax} ;
 import scala.collection.immutable.{SortedMap,TreeMap} ;
 
 
+/*
+ 
+ Syntax:
+
+ <field-name> ::= <symbol>
+
+ <var> ::= <symbol>
+
+ <exp> ::= <var>
+
+        |  (lambda (<var> ...) <exp:body>)
+
+        ; Records:
+        |  (record (<field-name> <exp:value>) ...)
+        |  (set-field! <exp:record> <field-name> <exp:value> <exp:body>)
+        |  (get-field  <exp:record> <field-name>)
+
+ TODO:
+        | (reflect-get-field  <exp:record> <exp:field>)
+        | (reflect-set-field! <exp:record> <exp:field> <exp:value> <exp:body>)
+        
+ 
+ */
+
+
 /** 
 
  LambdoSyntax contains all of the AST data types and primitive
@@ -160,6 +185,7 @@ object LambdoSyntax {
     }
   }
 
+
   /**
    Matches <code>(let|| ((<i>v</i><sub>1</sub> <i>sx</i><sub>1</sub>) ... (<i>v</i><sub><i>n</i></sub> <i>sx</i><sub><i>n</i></sub>)) <i>sx'</i>)</code>.   
    */
@@ -173,6 +199,7 @@ object LambdoSyntax {
       case _ => None
     }
   }
+
 
   /**
    Matches <code>(letrec ((<i>v</i><sub>1</sub> <i>sx</i><sub>1</sub>) ... (<i>v</i><sub><i>n</i></sub> <i>sx</i><sub><i>n</i></sub>)) <i>sx'</i>)</code>.   
@@ -199,6 +226,7 @@ object LambdoSyntax {
     }
   }
 
+
   /**
    Matches <code>(begin <i>sx</i> ...)</code>.
    */
@@ -210,6 +238,31 @@ object LambdoSyntax {
   }
 
 
+  object SRecord {
+    private def parseClause(clause : SExp) : (S,SExp) = clause match {
+      case L(List(s : S, sx)) => (s,sx)
+      case _ => throw new Exception("Error while parsing (record ...) field clause: " + clause)
+    }
+
+    def unapply(sx : SExp) : Option[(List[S],List[SExp])] = sx match {
+      case L(S("record") :: clauses) => Some(List.unzip(clauses map parseClause))
+      case _ => None
+    }
+  }
+
+  object SSetField {
+    def unapply(sx : SExp) : Option[(SExp,S,SExp,SExp)] = sx match {
+      case L(List(S("set-field!"), sxrec, sxfield : S, sxvalue, sxbody)) => Some((sxrec,sxfield,sxvalue,sxbody))
+      case _ => None
+    }
+  }
+
+  object SGetField {
+    def unapply(sx : SExp) : Option[(SExp,S)] = sx match {
+      case L(List(S("get-field"), sxrec, sxfield : S)) => Some((sxrec,sxfield))
+      case _ => None
+    }
+  }
 
 
   /* Terms. */
@@ -546,6 +599,28 @@ object LambdoSyntax {
 
 
 
+  /*
+   Object-related expressions.
+   */
+
+  type Field = Var
+
+  case class Record(fields : List[Field], values : List[Exp]) extends Exp {
+    private def sclause (fe : (Field,Exp)) : SExp = L(List(fe._1.toSExp, fe._2.toSExp))
+
+    def toSExp = L(S("record") :: (fields.zip(values) map sclause))
+    override def freeVars = freeVarsIn(values)
+  }
+
+  case class SetField(rec : Exp, field : Field, value : Exp, body : Exp) extends Exp {
+    def toSExp = L(List(S("set-field!"), rec.toSExp, field.toSExp, value.toSExp, body.toSExp))
+    override def freeVars = rec.freeVars ++ value.freeVars ++ body.freeVars
+  }
+
+  case class GetField(rec : Exp, field : Field) extends Exp {
+    def toSExp = L(List(S("get-field"), rec.toSExp, field.toSExp))
+    override def freeVars = rec.freeVars
+  }
 
 
   /**
@@ -671,7 +746,7 @@ object LambdoSyntax {
    Converts an S-Expression into an Exp.
    */
   def parseExp (sx : SExp) : Exp = (sx match {
-    case S(p @ ("+" | "-" | "/" | "*" | "=" | "<" | "<=" | ">=" | ">" | "gcd" | "modulo" | "quotient" | "random-byte" | "not" | "random-range")) => PPrimOp(p)
+    case S(p @ ("+" | "-" | "/" | "*" | "=" | "<" | "<=" | ">=" | ">" | "gcd" | "modulo" | "quotient" | "random-byte" | "not" | "random-range" | "odd?" | "even?")) => PPrimOp(p)
     case S(p @ ("display" | "newline")) => EPrimOp(p)
     case S("#f") => BoolLit(false)
     case S("#t") => BoolLit(true)
@@ -732,6 +807,14 @@ object LambdoSyntax {
       Set(parseVar(name), parseExp(value), VoidLit())
     case SBegin(exps) =>
       Seq(exps map parseExp)
+
+    case SRecord(sxfields,sxexps) => 
+      Record(sxfields map parseVar, sxexps map parseExp)
+    case SSetField(sxrec,sxfield,sxvalue,sxbody) =>
+      SetField(parseExp(sxrec),parseVar(sxfield),parseExp(sxvalue),parseExp(sxbody))
+    case SGetField(sxrec,sxfield) =>
+      GetField(parseExp(sxrec),parseVar(sxfield))
+
     
     case L(S("let") :: args) => throw new Exception("Compiler bug; could not properly parse: " + sx)
 
@@ -767,6 +850,21 @@ object ConcreteCommon {
   case object True extends SExp
   case object False extends SExp
   case object Unit extends SExp
+
+  class RecordVal extends SExp {
+    val fields = scala.collection.mutable.HashMap[Field,Value]()
+    override def toString = fields.toString
+  }
+  object RecordVal {
+    def apply(map : Map[String,Value]) : RecordVal = {
+      val objVal = new RecordVal
+      for ((s,v) <- map) {
+        objVal.fields(Var(s)) = v
+      }
+      objVal
+    }
+  }
+
 
   /**
    A cell contains a (mutable) value.
@@ -1006,6 +1104,9 @@ class LambdoMachine  {
   private case class KontSeq(exps : List[Exp], env : Env, kont : Kont) extends Kont
   private case class KontArgs(vals : List[Value], args : List[Exp], env : Env, kont : Kont) extends Kont
   private case class KontApp(kont : Kont) extends Kont
+  private case class KontObj(fields : List[Field], kont : Kont) extends Kont
+  private case class KontGetField(field : Field, kont : Kont) extends Kont
+  private case class KontSetField(field : Field, env : Env, body : Exp, kont : Kont) extends Kont
   private case class KontPrim(scalaCompilerBugWorkaround : Unit, val k : List[Value] => Unit) extends Kont
   private case class KontHalt() extends Kont
 
@@ -1040,6 +1141,10 @@ class LambdoMachine  {
       case lam @ Lambda(args,body) => AppKont(kont, List(Closure(lam,env)))
 
       case Seq(exps) => AppKont(KontSeq(exps,env,kont),List())
+
+      case Record(fields,e :: etail) => Eval(e,env,KontArgs(List(),etail,env,KontObj(fields,kont)))
+      case GetField(exp,field) => Eval(exp,env,KontGetField(field,kont))
+      case SetField(obj,field,value,body) => Eval(obj,env,KontArgs(List(),List(value),env,KontSetField(field,env,body,kont)))
       
       case If(cond,ifTrue,ifFalse) => Eval(cond,env,KontIf(ifTrue,ifFalse,env,kont))
       case Let1(v,e,body) => Eval(e,env,KontBind(v,env,body,kont))
@@ -1122,6 +1227,22 @@ class LambdoMachine  {
       }
       case KontApp(kont) =>
         AppProc(retvals.head.asInstanceOf[Proc], retvals.tail, kont)
+      case KontObj(fields,kont) => {
+        val rec = new RecordVal 
+        for ((f,v) <- fields zip retvals) {
+          rec.fields(f) = v
+        }
+        AppKont(kont,List(rec))
+      }
+      case KontGetField(field,kont) => {
+        AppKont(kont,List(retvals.head.asInstanceOf[RecordVal].fields(field)))
+      }
+      case KontSetField(field,env,body,kont) => {
+        val rec = retvals.head.asInstanceOf[RecordVal]
+        val value = retvals(1)
+        rec.fields(field) = value
+        Eval(body,env,kont)
+      }
       case KontPrim((),k) =>
         { k(retvals) ; SuspendedState }
       case _ => throw new Exception("Unknown kont: " + kont)
@@ -1412,9 +1533,12 @@ object Lambdo {
     verboseln("input:\n" + input)
 
     // Read the standard lib:
+    /*
     val stdlib : String = (scala.io.Source.fromFile("lib/stdlib.scm")) mkString ""
+    */
 
-    val source = stdlib + "\n" + input
+    //val source = stdlib + "\n" + input
+    val source = input
 
     // Parse the input:
     val sparser = new SParser

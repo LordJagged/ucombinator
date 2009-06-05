@@ -18,7 +18,10 @@ import scala.collection.immutable.{SortedSet,TreeSet} ;
 
 
 object AbstractCommon {
-  import LambdoSyntax.{Var,Lambda}
+
+  private [hofa] var useRangeBasedTouching = true
+
+  import LambdoSyntax._
 
   trait Loc extends TagOrdered[Loc] with JSONable {
     def orderTag = this.getClass().getName()
@@ -47,10 +50,12 @@ object AbstractCommon {
     def localCompare (that : Loc) = this.variable compare that.asInstanceOf[VarLoc].variable
     
     override lazy val hashCode : Int = variable.hashCode()
+    /*
     override def equals (that : Any) = that match {
       case VarLoc(v2) => variable equals v2
       case _ => false
     }
+    */
 
     def toJSON() : JSONExp = {
       import JSONSyntax._
@@ -58,18 +63,43 @@ object AbstractCommon {
     }
   }
 
-  case class ExpLoc(val exp : LambdoSyntax.Exp) extends Loc {
+  case class ExpLoc(val exp : Exp) extends Loc {
     def localCompare (that : Loc) = this.exp compare that.asInstanceOf[ExpLoc].exp
     
     override lazy val hashCode : Int = exp.hashCode()
+    /*
     override def equals (that : Any) = that match {
       case ExpLoc(exp2) => exp equals exp2
+      case _ => false
+    }
+    */
+
+    def toJSON() : JSONExp = {
+      import JSONSyntax._
+      F("ExpLoc",List(exp.toJSON()))
+    }
+  }
+
+  
+  /**
+   A FieldLoc object represents a memory location for the field of an object.
+   */
+  case class FieldLoc(field : Field, oLoc : Loc) extends Loc {
+    def localCompare (that : Loc) : Int = that match {
+      case FieldLoc(field2,oLoc2) => 
+        TotalOrder.compare[Field,Loc,org.ucombinator.languages.SyntaxNode,Loc] (field,oLoc) (field2,oLoc2)
+        //TotalOrder.lexicographicComparison (field,oLoc) (field2,oLoc2)
+    }
+    
+    override lazy val hashCode : Int = field.hashCode() + 2 * oLoc.hashCode()
+    override def equals (that : Any) = that match {
+      case fl2 : FieldLoc => (this compare fl2) == 0
       case _ => false
     }
 
     def toJSON() : JSONExp = {
       import JSONSyntax._
-      F("ExpLoc",List(exp.toJSON()))
+      F("FieldLoc",List(field.toJSON(), oLoc.toJSON()))
     }
   }
 
@@ -80,10 +110,12 @@ object AbstractCommon {
     }
 
     override val hashCode = n
+    /*
     override def equals(o : Any) = o match {
       case NatLoc(n2) => n == n2
       case _ => false
     }
+    */
 
     def toJSON() : JSONExp = {
       import JSONSyntax._
@@ -95,7 +127,11 @@ object AbstractCommon {
   trait BEnv extends Ordered[BEnv] with JSONable {
     def + (v : Var, loc : Loc) : BEnv ;
     def ++ (vls : Iterable[(Var,Loc)]) : BEnv ;
-    def -- (vars : Iterable[Var]) : BEnv ;
+
+    /**
+     Produces an identical binding environment, except its domain is restricted to the argument.
+     */
+    def / (vars : Iterable[Var]) : BEnv ;
 
     def apply(k : Var) : Loc ;
     def get (k : Var) : Option[Loc] ;
@@ -103,8 +139,8 @@ object AbstractCommon {
 
     def toMap : Map[Var,Loc] ;
 
-    override def hashCode() : Int = throw new Exception("hashCode() not implemented in BEnv")
-    override def equals(a : Any) : Boolean = throw new Exception("equals() not implemented in BEnv")
+    override def hashCode() : Int = throw new Exception("hashCode() not implemented in " + this.getClass().getName())
+    override def equals(a : Any) : Boolean = throw new Exception("equals() not implemented in " + this.getClass().getName())
 
     def toJSON() : JSONExp = {
       import JSONSyntax._
@@ -114,8 +150,7 @@ object AbstractCommon {
   }
 
 
-
-  object Val extends HashCanonicalizer[Val] 
+  // object Val extends HashCanonicalizer[Val] 
   trait Val extends TagOrdered[Val] with JSONable {
     def localCompare (val2 : Val) : Int ;
     def orderTag = this.getClass().getName() 
@@ -130,26 +165,119 @@ object AbstractCommon {
     def toJSON() : JSONExp = throw new Exception("toJSON() not yet implemented in " + this.getClass().getName())
   }
 
+  trait KontMark extends TagOrdered[KontMark] {
+    def toJSON()  : JSONExp ;
+    def orderTag = this.getClass().getName()
 
+    override def hashCode : Int = throw new Exception("hashCode not yet implemented in " + this.getClass().getName())
+    
+    override def equals(a : Any) = a match {
+      case that : KontMark => (this compare that) == 0
+    }
+  }
+
+  case object EmptyMark extends KontMark {
+    def localCompare (that : KontMark) = 0
+    def toJSON() = JSONSyntax.S("EmptyMark")
+
+    override def hashCode : Int = 1
+  }
+
+
+
+  abstract class ProcCall extends TagOrdered[ProcCall] {
+    def orderTag = this.getClass().getName()
+
+    def toJSON() : JSONExp ;
+
+    override def hashCode : Int = throw new Exception("hashCode not yet implemented in " + this.getClass().getName())
+
+    override def equals (a : Any) = a match {
+      case that : ProcCall => (this compare that) == 0
+    }
+  }
+
+  case class MonoProcCall(lam : Lambda) extends ProcCall {
+    def localCompare (that : ProcCall) : Int = that match {
+      case MonoProcCall (lam2) => lam compare lam2
+    }
+
+    override lazy val hashCode : Int = lam.hashCode()
+
+    def toJSON() : JSONExp = JSONSyntax.F("MonoProcCall", List(lam.toJSON()))
+
+    override def toString() : String = "lam" + lam.label
+  }
+
+
+  case class CallMark(val calls : scala.collection.immutable.SortedSet[ProcCall]) extends KontMark {
+    def localCompare (that : KontMark) = that match {
+      case CallMark(calls2) => TotalOrder.compare (calls) (calls2) (TotalOrder.orderIdentity)
+    }
+
+    override lazy val hashCode : Int = calls.foldRight (0) { case (p,hash) => p.hashCode() + 2*hash }
+    
+    def toJSON() = JSONSyntax.F("CallMark",calls.toList map (_.toJSON()))
+
+    def + (call : ProcCall) : CallMark = CallMark(calls + call)
+  }
+
+  case object EmptyCallMark extends CallMark(scala.collection.immutable.TreeSet[ProcCall]()(TotalOrder.orderIdentity[ProcCall]))
+
+
+  /**
+   A Proc object represents a closure or a primitive operation.
+   */
   trait Proc extends Val
+
+  /**
+   A Bas object represents a basic value.
+   */
   trait Bas extends Val {
     override def touches(store : Store) = List()
   }
-  trait Kont extends Val
 
+  /**
+   A Kont object represents a continuation.
+   */
+  trait Kont extends Val {
+    def mark : KontMark ;
+    def mark_= (mark : KontMark) : Kont ;
 
-  case object HaltKont extends Kont with LocallySingletonOrdered[Val] {
+    def stackTouches (store : Store) : List[Kont] ;
+  }
+
+  /**
+   A HaltKont object represents the "halt" continuation.
+   */
+  case class HaltKont(val mark : KontMark) extends Kont with LocallySingletonOrdered[Val] {
     override def touches(store : Store) = List()
+
+    def mark_= (newMark : KontMark) : Kont = HaltKont(newMark)
+
+    def stackTouches (store : Store) : List[Kont] = List()
 
     override val hashCode : Int = 10
     override def toJSON() = JSONSyntax.S("HaltKont")
   }
 
   
-  case class KontLet1(val v : Var, val exp : LambdoSyntax.Exp, val bEnv : BEnv, val kontp : Loc) extends Kont {
+  /**
+   A KontLet1 object encodes the return point of let form.
+   */
+  case class KontLet1(val v : Var, val exp : Exp, val bEnv : BEnv, val kontp : Loc, val mark : KontMark) extends Kont {
 
-    override def touches(store : Store) : List[Loc] = {
-      kontp :: ((exp.freeVars - v).toList map ((v : Var) => bEnv(v)))
+    def mark_= (newMark : KontMark) : Kont =
+      KontLet1(v,exp,bEnv,kontp,newMark)
+
+    override def touches(store : Store) : List[Loc] = 
+      if (useRangeBasedTouching) 
+        (kontp :: (bEnv.toMap.toList map (_._2)))
+      else 
+        (kontp :: ((exp.freeVars - v).toList map ((v : Var) => bEnv(v))))
+
+    def stackTouches (store : Store) : List[Kont] = {
+      store(kontp).toList.asInstanceOf[List[Kont]]
     }
 
     def localCompare(that : Val) : Int = {
@@ -163,10 +291,14 @@ object AbstractCommon {
       val c3 = kontp compare kont2.kontp
       if (c3 != 0)
         return c3
+      val c4 = mark compare kont2.mark
+      if (c4 != 0)
+        return c4
       bEnv compare kont2.bEnv
     }
     
-    override lazy val hashCode : Int = v.hashCode() * 4 + exp.hashCode() * 3 + bEnv.hashCode() * 2 + kontp.hashCode()
+    override lazy val hashCode : Int =
+      mark.hashCode() * 5 + v.hashCode() * 4 + exp.hashCode() * 3 + bEnv.hashCode() * 2 + kontp.hashCode()
 
     override def toJSON() : JSONExp = {
       import JSONSyntax._
@@ -174,19 +306,24 @@ object AbstractCommon {
       F("KontLet1",List(O(Map("v" -> v.toJSON(), 
                               "exp" -> exp.toJSON(),
                               "bEnv" -> bEnv.toJSON(),
-                              "kontp" -> kontp.toJSON()))))
+                              "kontp" -> kontp.toJSON(),
+                              "mark" -> mark.toJSON()))))
     }
   }
 
 
   object Clo {
-    def apply (lam : Lambda, bEnv : BEnv) = (Val(new Clo(lam,bEnv))).asInstanceOf[Clo]
+    //def apply (lam : Lambda, bEnv : BEnv) = (Val(new Clo(lam,bEnv))).asInstanceOf[Clo]
+    def apply (lam : Lambda, bEnv : BEnv) = new Clo(lam,bEnv)
     def unapply (clo : Clo) = Some((clo.lam,clo.bEnv))
   }
 
   class Clo(val lam : Lambda, val bEnv : BEnv) extends Proc {
-    //override def touches (store : Store) = (bEnv.toMap.toList map (_._2))
-    override def touches (store : Store) = (lam.freeVars.toList map ((v : Var) => bEnv(v)))
+    override def touches (store : Store) =
+      if (useRangeBasedTouching)
+        (bEnv.toMap.toList map (_._2))
+      else
+        (lam.freeVars.toList map ((v : Var) => bEnv(v)))
 
     def localCompare(v : Val) : Int = {
       val clo2 = v.asInstanceOf[Clo]
@@ -206,6 +343,19 @@ object AbstractCommon {
     }
   }
 
+
+  case class Record (val oLoc : Loc, val fields : scala.collection.immutable.SortedMap[Field,Loc]) extends Val {
+    def localCompare (that : Val) : Int = that match {
+      case Record(oLoc2,fields2) => {
+        val cmp = oLoc compare oLoc2
+        if (cmp != 0)
+          return cmp
+        TotalOrder.compare (fields) (fields2)
+      }
+    }
+    override def touches(store : Store) = fields.toList map (_._2)
+    override lazy val hashCode : Int = fields.foldRight (0) { case ((f,loc),hash) => f.hashCode() + loc.hashCode() + 2*hash }
+  }
 
 
   /* Contexts. */
@@ -263,7 +413,7 @@ object AbstractCommon {
   /**
    A primitive value must be a trivially evaluable, such as a PrimOp.
    */
-  case class Op(val op : LambdoSyntax.Exp) extends Proc {
+  case class Op(val op : Exp) extends Proc {
     override def touches(store : Store) = List()
 
     def localCompare(that : Val) = op compare that.asInstanceOf[Op].op
@@ -475,6 +625,15 @@ object AbstractCommon {
       new ArrayStoreHash(a,a.length)
     }
 
+    def apply(entries : Iterable[(Loc,D)]) : ArrayStoreHash = {
+      // TODO: Speed this up.
+      var hash = ArrayStoreHash()
+      for ((l,d) <- entries) {
+        hash = join(hash,apply(l,d))
+      }
+      hash
+    }
+
     def join (a : ArrayStoreHash, b : ArrayStoreHash) : ArrayStoreHash = {
       val c = new Array[Long](a.length + b.length)
       var ai = 0 
@@ -518,6 +677,8 @@ object AbstractCommon {
     def + (l : Loc, d : D) : Store ;
     def ++ (lds : Iterable[(Loc,D)]) : Store ;
     def join (s2 : Store) : Store ;
+
+    def strongUpdate(l : Loc, d : D) : Store ;
     
     def isSubsumedBy(s2 : Store) : Boolean ;
     def toList : List[(Loc,D)]
@@ -539,7 +700,10 @@ object AbstractCommon {
 
 
 
-
+trait WideningDegree
+case object SingleWidening extends WideningDegree
+case object PerFlatWidening extends WideningDegree
+case object NoWidening extends WideningDegree
 
 
 
@@ -559,7 +723,7 @@ object StandardDomains {
   case object MonoBEnv extends BEnv {
     def + (v : Var, loc : Loc) : BEnv = this
     def ++ (vls : Iterable[(Var,Loc)]) = this
-    def -- (vars : Iterable[Var]) = this
+    def / (vars : Iterable[Var]) = this
 
     def apply(v : Var) : Loc = VarLoc(v)
     def get (v : Var) : Option[Loc] = Some(VarLoc(v))
@@ -578,7 +742,13 @@ object StandardDomains {
   class StdBEnv(val map : SortedMap[Var,Loc]) extends BEnv {
     def + (v : Var, l : Loc) : BEnv = new StdBEnv(map(v) = l)
     def ++ (vls : Iterable[(Var,Loc)]) : BEnv = new StdBEnv(map ++ vls)
-    def -- (vars : Iterable[Var]) : BEnv = new StdBEnv(map -- vars)
+    def / (vars : Iterable[Var]) : BEnv = {
+      var map_ = TreeMap[Var,Loc]()(LambdoSyntax.varToOrdered)
+      for (v <- vars) {
+        map_ = map_(v) = map(v)
+      }
+      new StdBEnv(map_)
+    }
 
     def apply(k : Var) : Loc  = map(k)
     def get (k : Var) : Option[Loc] = map.get(k)
@@ -617,7 +787,7 @@ object StandardDomains {
       0
     }
 
-    override lazy val hashCode : Int = map.foldRight (0) { case (el,hash) => el.hashCode() + 2*hash }
+    override lazy val hashCode : Int = map.foldRight (0) { case ((v,loc),hash) => v.hashCode() + loc.hashCode() + 2*hash }
     override def equals(a : Any) : Boolean = (this compare a.asInstanceOf[BEnv]) == 0
 
     override def toString = map.toString
@@ -679,7 +849,13 @@ object StandardDomains {
       s2 ++ map
     }
 
-    override lazy val hashCode : Int = map.foldRight (0) { case (el,hash) => el.hashCode() + 2*hash }
+    def strongUpdate(l : Loc, d : D) : Store = {
+      val newMap = (map - l)(l) = d
+      
+      new StdStore(newMap,ArrayStoreHash(newMap))
+    }
+
+    override lazy val hashCode : Int = map.foldRight (0) { case ((loc,d),hash) => loc.hashCode() + d.hashCode() + 2*hash }
     override def equals(a : Any) : Boolean = map equals a.asInstanceOf[StdStore].map
 
     override def toString = map.toString
@@ -741,9 +917,10 @@ abstract class UniversalCFAFramework extends MonotoneTransitionSystem {
 
   type K <: Context
 
-  var usePerFlatWidening = false
-  var useAbstractGarbageCollection = false
+  var wideningDegree : WideningDegree = NoWidening
+  var useAbstractGarbageCollection = true
   var useBindingEnvironmentRestriction = true
+  
 
   /**
    Evaluates pure primitive operations in the abstract.
@@ -772,8 +949,8 @@ abstract class UniversalCFAFramework extends MonotoneTransitionSystem {
     case (PPrimOp("random-range"),_) => mkD(ANum)
     case (PPrimOp("random-byte"),_) => mkD(ANum)
     case (PPrimOp("not"),_) => mkD(TrueVal,FalseVal)
-    //case (PPrimOp("odd?"),_) => mkD(TrueVal,FalseVal)
-    //case (PPrimOp("even?"),_) => mkD(TrueVal,FalseVal)
+    case (PPrimOp("odd?"),_) => mkD(TrueVal,FalseVal)
+    case (PPrimOp("even?"),_) => mkD(TrueVal,FalseVal) 
 
     case _ => throw new Exception("unknown primop: " + p)
   }
@@ -803,7 +980,11 @@ abstract class UniversalCFAFramework extends MonotoneTransitionSystem {
    */
   protected def atomEval (be : BEnv, store : Store) (exp : Exp) : D = exp match {
     case lit : LitExp => litEval(lit)
-    case lam @ Lambda(args,body) => mkD(Clo(lam,if (useBindingEnvironmentRestriction) { be -- lam.freeVars } else { be }))
+    case lam @ Lambda(args,body) => 
+      mkD(Clo(lam,if (useBindingEnvironmentRestriction) 
+                    { be / lam.freeVars } 
+                  else
+                    { be }))
     case App(p : PPrimOp, args) => primEval(p, args map (atomEval (be,store)))
     case Ref(v) => be get v match {
       case Some(loc) => store get loc match {
@@ -822,6 +1003,14 @@ abstract class UniversalCFAFramework extends MonotoneTransitionSystem {
 
   
   private[hofa] def mkD(vals : Val*) : D = {
+    var d = botD
+    for (v <- vals) {
+      d = d + v
+    }
+    d
+  }
+
+  private[hofa] def mkD(vals : List[Val]) : D = {
     var d = botD
     for (v <- vals) {
       d = d + v
@@ -885,7 +1074,7 @@ abstract class UniversalCFAFramework extends MonotoneTransitionSystem {
   }
 
 
-  abstract class AbstractState extends MonotoneNode[Flat,Sharp] with JSONable {
+  abstract class AbstractState extends MonotoneNode[Flat,Sharp] with Registerable with JSONable {
     lazy val serial : Long = StateTable(this)
 
     def isGarbageCollectable : Boolean ;
@@ -920,13 +1109,36 @@ abstract class UniversalCFAFramework extends MonotoneTransitionSystem {
 
   /* Abstract garbage collection utilities. */
   
-  trait StoreNode extends Node {
-    def serial = -1 
+  
+  
+  class StackGraph(val store0 : Store) extends ImplicitGraph {
+
+    type N = Kont
+    
+    val seen = scala.collection.mutable.HashSet[Kont]()
+
+    def mark (n : N) : Unit = {
+      seen += n
+    }
+
+    def seen (n : N) : Option[N] = {
+      if (seen.contains(n))
+        Some(n)
+      else
+        None
+    }
+
+    def succ (n : N) : List[N] = {
+      n.stackTouches(store0) 
+    }
   }
+
+
+  trait StoreNode
   case class LocNode(val loc : Loc) extends StoreNode
   case class ValNode(val value : Val) extends StoreNode
-  
-  
+
+
   class StoreGraph(val store0 : Store) extends ImplicitGraph {
     
     type N = StoreNode
@@ -997,6 +1209,17 @@ abstract class UniversalCFA_ANF extends UniversalCFAFramework {
   import LambdoSyntax._
 
 
+  def initMark : KontMark ;
+  var kontMarkingEnabled : Boolean = true ;
+
+  /**
+   Modifies the continuation mark when a procedure is invoked.
+   */
+  def mark (proc : Val, state : AbstractState) (kont : Kont) : Kont = {
+    kont
+  }
+
+
   /**
    Selects a new abstract context when evaluating the procedure proc.
    */
@@ -1039,6 +1262,11 @@ abstract class UniversalCFA_ANF extends UniversalCFAFramework {
   def nextContext (kont : Kont, state : ApplyProcState) : K ;
 
 
+  def nextContext (rec : AbstractCommon.Record, kont : Kont, state : EvalState) : K ;
+
+
+
+
   /**
    Allocates locatives for the supplied variables during procedure application.
    */
@@ -1068,6 +1296,11 @@ abstract class UniversalCFA_ANF extends UniversalCFAFramework {
    Allocates a locative for let-induced continuation.
    */
   def alloc (exp : Exp, state : EvalState) : Loc ;
+
+  /**
+   Allocates fields for an object.
+   */
+  def allocNew (kont : Kont, s : EvalState, fields : List[Field], exps : List[Exp]) : (Loc,List[Loc]) ;
 
 
   /**
@@ -1118,8 +1351,6 @@ abstract class UniversalCFA_ANF extends UniversalCFAFramework {
   }
 
 
-
-
   
   case class EvalState(val exp : Exp, val bEnv : BEnv, val store : Store, val kontp : Loc, val k : K) extends AbstractState {
     val isCacheable = true
@@ -1132,8 +1363,12 @@ abstract class UniversalCFA_ANF extends UniversalCFAFramework {
     def sharp : Sharp = Sharp(store)
     def sharp_= (s : Sharp) : EvalState = EvalState(exp,bEnv,s.store,kontp,k)
 
-    //override def touches : List[StoreNode] = (kontp :: (bEnv.toMap.toList map (_._2))) map (LocNode(_))
-    override def touches = (LocNode(kontp) :: (exp.freeVars.toList map ((v : Var) => LocNode(bEnv(v)))))
+    override def touches : List[StoreNode] =
+      if (useRangeBasedTouching)
+        (kontp :: (bEnv.toMap.toList map (_._2))) map (LocNode(_))
+      else
+        // Free-based GC.
+        (LocNode(kontp) :: (exp.freeVars.toList map ((v : Var) => LocNode(bEnv(v)))))
 
     override def toJSON() : JSONExp = {
       import JSONSyntax._ ;
@@ -1211,7 +1446,7 @@ abstract class UniversalCFA_ANF extends UniversalCFAFramework {
   /**
    AtomExp pattern matches atomic expressions.
    */
-  private object AtomExp {
+  private [hofa] object AtomExp {
     def unapply(exp : Exp) : Option[Unit] = exp match {
       case _ : TrivialExp => Some()
       case App(_ : PPrimOp,_) => Some()
@@ -1223,7 +1458,7 @@ abstract class UniversalCFA_ANF extends UniversalCFAFramework {
   /* Satisfying MonotoneTransitionSystem requirements. */
   type C = ListSharpCache[S]
 
-  protected def makeC(init : S) = new ListSharpCache[S](usePerFlatWidening)
+  protected def makeC(init : S) = new ListSharpCache[S](wideningDegree == PerFlatWidening)
 
   def fuse (flat : F, sharp : S) : N = flat match {
     case EvalFlat(exp,bEnv,kontp,k) => EvalState(exp, bEnv, sharp.store, kontp, k)
@@ -1236,7 +1471,18 @@ abstract class UniversalCFA_ANF extends UniversalCFAFramework {
       val argVals = args map (atomEval (be,store) _)
       for (proc <- (atomEval (be,store) (f)).toList if proc.isInstanceOf[Proc]) yield {
         val k_ = nextContext(proc,s)
-        ApplyProcState(proc, argVals, store, kontp, k_)
+        // BUG/TODO: Enable marking of tail calls.
+        /*
+        val store_ = if (kontMarkingEnabled) {
+          val konts = store(kontp).toList.asInstanceOf[List[Kont]]
+          val konts_ = konts map (mark (proc.asInstanceOf[Proc],s) _)
+          store.strongUpdate(kontp,mkD(konts_))
+        } else {
+          store
+        }
+        */
+        val store_ = store
+        ApplyProcState(proc, argVals, store_, kontp, k_)
       }
     }
 
@@ -1249,20 +1495,53 @@ abstract class UniversalCFA_ANF extends UniversalCFAFramework {
       List(EvalState(body,bEnv_,store_,kontp,k_))
     }
 
+    case s @ EvalState(GetField(rec,field),bEnv,store,kontp,k) => {
+      val recs = atomEval (bEnv,store) (rec)
+      // TODO: Add flag for merging all objects.
+      val states = for (rec <- recs.toList if rec.isInstanceOf[AbstractCommon.Record]) yield {
+        val rek = rec.asInstanceOf[AbstractCommon.Record]
+        for (kont <- store(kontp).toList if kont.isInstanceOf[Kont]) yield {
+          val cont = kont.asInstanceOf[Kont]
+          val k_ = nextContext(rek,cont,s) 
+          val fieldLoc = rek.fields(field)
+          val value = store(fieldLoc)
+          ApplyKontState(cont,List(value),store,k_)
+        }
+      }
+      states.foldRight (List[AbstractState]()) ((x : List[AbstractState], y : List[AbstractState]) => x ++ y)
+    }
+    
     case s @ EvalState(atom @ AtomExp(()),bEnv,store,kontp,k) => {
       val result = atomEval (bEnv,store) (atom)
       for (kont <- store(kontp).toList if kont.isInstanceOf[Kont]) yield {
-        val k_ = nextContext(kont,s)
-        ApplyKontState(kont.asInstanceOf[Kont], List(result), store, k_)
+        val cont = kont.asInstanceOf[Kont]
+        val k_ = nextContext(cont,s)
+        ApplyKontState(cont, List(result), store, k_)
       }
     }
 
-    case s @ EvalState(Let1(v,app : App,body),bEnv,store,kontp,k) => {
-      List(EvalAppState(app,bEnv,store,KontLet1(v,body,bEnv,kontp),k))
+    case s @ EvalState(LambdoSyntax.Record(fields,exps),bEnv,store,kontp,k) => {
+      val vals = exps map (atomEval (bEnv,store))
+      for (kont <- store(kontp).toList if kont.isInstanceOf[Kont]) yield {
+        val cont = kont.asInstanceOf[Kont]
+        val k_ = nextContext(kont,s)
+        val (oLoc,fieldLocs) = allocNew(cont,s,fields,exps)
+        val fieldsMap = scala.collection.immutable.TreeMap[Field,Loc]() ++ (fields zip fieldLocs)
+        val rec = AbstractCommon.Record(oLoc,fieldsMap)
+        val store_ = store ++ (fieldLocs zip vals)
+        val d = mkD(rec)
+        ApplyKontState(cont, List(d), store_, k_)
+      }
+
+    }
+
+    case s @ EvalState(Let1(v,app : App,body),bEnv,store,kontp,k_) => {
+      val k_ = nextContext(s)
+      List(EvalAppState(app,bEnv,store,KontLet1(v,body,bEnv,kontp,initMark),k_))
     }
     
     case s @ EvalState(Let1(v,exp,body),bEnv,store,kontp,k) => {
-      val kont = KontLet1(v,body,bEnv,kontp)
+      val kont = KontLet1(v,body,bEnv,kontp,initMark)
       val kontp_ = alloc(exp,s)
       val store_ = store + (kontp_,mkD(kont))
       val k_ = nextContext(s)
@@ -1273,8 +1552,13 @@ abstract class UniversalCFA_ANF extends UniversalCFAFramework {
       val argVals = args map (atomEval (be,store) _)
       for (proc <- (atomEval (be,store) (f)).toList if proc.isInstanceOf[Proc]) yield {
         val k_ = nextContext(proc,s)
+        val kont_ = if (kontMarkingEnabled) {
+          mark (proc.asInstanceOf[Proc],s) (kont)
+        } else {
+          kont
+        }
         val kontp = alloc(proc,s)
-        val store_ = store + (kontp, mkD(kont))
+        val store_ = store + (kontp, mkD(kont_))
         ApplyProcState(proc, argVals, store_, kontp, k_)
       }
     }
@@ -1337,8 +1621,16 @@ abstract class UniversalCFA_ANF extends UniversalCFAFramework {
 
     case ApplyProcState(Op(EPrimOp("halt")),_,_,_,_) => List()
 
+    case s @ ApplyProcState(Op(EPrimOp("display" | "newline")),dvec,store,kontp,k) => {
+      for (kont <- store(kontp).toList) yield {
+        val cont = kont.asInstanceOf[Kont]
+        val k_ = nextContext(cont,s)
+        ApplyKontState(cont,List(mkD(VoidVal)),store,k_)
+      }
+    }
 
-    case s @ ApplyKontState(KontLet1(v,exp,bEnv,kontp), List(result), store, k) => {
+
+    case s @ ApplyKontState(KontLet1(v,exp,bEnv,kontp,mark), List(result), store, k) => {
       val loc = alloc(v,s)
       val bEnv_ = bEnv + (v,loc)
       val store_ = store + (loc,result)
@@ -1346,7 +1638,7 @@ abstract class UniversalCFA_ANF extends UniversalCFAFramework {
       List(EvalState(exp,bEnv_,store_,kontp,k_))
     }
 
-    case s @ ApplyKontState(HaltKont, answers, store, k) => 
+    case s @ ApplyKontState(HaltKont(mark), answers, store, k) => 
       List()
 
     case unmatched => {
@@ -1362,6 +1654,157 @@ abstract class UniversalCFA_ANF extends UniversalCFAFramework {
 
 
 
+trait UniversalCFA
+
+
+trait Registerable {
+  def serial : Long ;
+}
+
+
+
+trait DependenceAnalysis extends UniversalCFA_ANF {
+  
+  import AbstractCommon._
+  import LambdoSyntax._
+
+  type N <: AbstractState
+
+  val accesses = scala.collection.mutable.HashMap[ProcCall,scala.collection.mutable.HashSet[Loc]]()
+  val modifies = scala.collection.mutable.HashMap[ProcCall,scala.collection.mutable.HashSet[Loc]]()
+
+  private def addrsIn (bEnv : BEnv) (exps : List[Exp]) : List[Loc] = {
+    for (e <- exps if e.isInstanceOf[Ref]) yield {
+      bEnv(e.asInstanceOf[Ref].v)
+    }
+  }
+
+
+
+  private def reads (state : AbstractState) : List[Loc] = {
+    state match {
+      case EvalState(a @ AtomExp(()),bEnv,store,kontp,k) => addrsIn (bEnv) (List(a))
+
+      case EvalState(App(f,args),bEnv,store,kontp,k) => addrsIn (bEnv) (f :: args)
+      case EvalAppState(App(f,args),bEnv,store,kontp,k) => addrsIn (bEnv) (f :: args)
+      case EvalState(Let1(v,e,body),bEnv,store,kontp,k) => addrsIn (bEnv) (List(e))
+      case EvalState(LetRec(vars,lams,body),bEnv,store,kontp,k) => List() // LetRec uses nothing.
+      case EvalState(If(cond,ifTrue,ifFalse),bEnv,store,kontp,k) => addrsIn (bEnv) (List(cond))
+      case EvalState(Set(v,e,body),bEnv,store,kontp,k) => addrsIn (bEnv) (List(e))
+
+      case ApplyProcState(proc,args,store,kontp,k) => List()
+      case ApplyKontState(kont,rv,store,k) => List()
+    }
+  }
+  
+  private def writes (state : AbstractState) : List[Loc] = {
+    state match {
+      case EvalState(Set(v,e,body),bEnv,store,kontp,k) => addrsIn(bEnv)(List(e))
+      case _ => List()
+    }
+  }
+
+  private def frames (state : AbstractState) : List[Kont] = {
+    val stackGraph = new StackGraph(state.store)
+
+    val konts = state match {
+      case EvalState(_,_,store,kontp,_) => store(kontp).toList.asInstanceOf[List[Kont]]
+      case EvalAppState(_,_,_,kont,_) => List(kont)
+      case ApplyProcState(_,_,store,kontp,_) => store(kontp).toList.asInstanceOf[List[Kont]]
+      case ApplyKontState(kont,_,_,_) => List(kont)
+    }
+
+    stackGraph.explore(konts)
+
+    stackGraph.seen.toList
+  }
+
+  
+  def access(call : ProcCall) : scala.collection.mutable.HashSet[Loc] = {
+    (accesses get call) match {
+      case None => {
+        val set : scala.collection.mutable.HashSet[Loc] = new scala.collection.mutable.HashSet[Loc]()
+        accesses(call) = set
+        set
+      }
+      case Some(set) => set
+    }
+  }
+
+
+  def modify(call : ProcCall) : scala.collection.mutable.HashSet[Loc] = {
+    (modifies get call) match {
+      case None => {
+        val set : scala.collection.mutable.HashSet[Loc] = new scala.collection.mutable.HashSet[Loc]()
+        modifies(call) = set
+        set
+      }
+      case Some(set) => set
+    }
+  }
+  
+
+  override def recordTransition(state : N, next : List[N]) {
+
+    // What's on live on the stack?
+    val konts = frames(state)
+
+    // What's read here?
+    val rs = reads(state)
+
+    // What's written here?
+    val ws = writes(state)
+
+    for (kont <- konts) {
+      val mark = kont.mark
+      val calls = mark.asInstanceOf[CallMark].calls
+      
+      for (call <- calls) {
+        for (r <- rs) {
+          val set = access(call)  
+          set += r
+        }
+        
+        for (w <- ws) {
+          val set = modify(call)
+          set += w
+        }
+      }
+    }
+
+    super.recordTransition(state,next)
+  }
+
+  private def quote(s : String) : String = {
+    s.replaceAll("\\\"","\\\\\"")
+  }
+
+  def toDepDot() : String = {
+    val s = new StringBuilder() 
+    s.append("digraph {\n")
+    
+    s.append(" graph [rankdir=TB]\n")
+
+    for ((call,locs) <- accesses) {
+      for (loc <- locs) {
+        val callStr = "\"" + quote(call.toString()) + "\""
+        val locStr = "\"" + quote(loc.toJSON().toString()) + "\""
+        s.append(" " +locStr+ " -> " +callStr+ "\n")
+      }
+    }
+
+    for ((call,locs) <- modifies) {
+      for (loc <- locs) {
+        val callStr = "\"" + quote(call.toString()) + "\""
+        val locStr = "\"" + quote(loc.toJSON().toString()) + "\""
+        s.append(" " +callStr+ " -> " +locStr+ "\n")
+      }
+    }
+
+    s.append("}\n")
+    s.toString()
+  }
+}
 
 
 
@@ -1369,7 +1812,9 @@ abstract class UniversalCFA_ANF extends UniversalCFAFramework {
  A GraphingTransitionSystem constructs a graph of the system during exploration.
  */
 trait GraphingTransitionSystem extends TransitionSystem {
-  
+
+  type N <: Registerable
+
   val narrowingEdges = scala.collection.mutable.HashMap[N,N]()
   val wideningEdges = scala.collection.mutable.HashMap[N,N]()
   val transitionEdges = scala.collection.mutable.HashMap[N,List[N]]()
@@ -1384,7 +1829,7 @@ trait GraphingTransitionSystem extends TransitionSystem {
   }
 
   override def recordWidening(state : N, state_ : N) {
-    index(state.serial) = state 
+    index(state.serial) = state
     if (state.serial == state_.serial) 
       return ;
     wideningEdges(state) = state_
@@ -1460,9 +1905,21 @@ class `0CFA_ANF` extends UniversalCFA_ANF {
   import LambdoSyntax._
   import AbstractCommon._
 
-  def botBEnv = StandardDomains.MonoBEnv
+  var useMonoBindingEnvironment = false
+
+  def botBEnv = if (useMonoBindingEnvironment) { StandardDomains.MonoBEnv } else { StandardDomains.botBEnv }
   def botStore = StandardDomains.botStore
   def botD = StandardDomains.botD
+
+  def initMark = EmptyCallMark
+  
+  override def mark (proc : Val, state : AbstractState) (kont : Kont) : Kont = {
+    proc match {
+      case Clo(lam,be) => kont.mark = (kont.mark.asInstanceOf[CallMark] + MonoProcCall(lam))
+      case _ => kont
+    }
+  }
+
 
   type K = AbstractCommon.Context
 
@@ -1475,10 +1932,18 @@ class `0CFA_ANF` extends UniversalCFA_ANF {
     VarLoc(v)
   def alloc (proc : Val, state : EvalAppState) : Loc = proc match {
     case Clo(lam,bEnv) => ExpLoc(lam)
-    // Ops not yet supported.
+    case Op(prim) => ExpLoc(prim)
   }
   def alloc (exp : Exp, state : EvalState) : Loc = ExpLoc(exp)
   def alloc (v : Var, state : ApplyKontState) : Loc = VarLoc(v)
+
+  def allocNew (kont : Kont, s : EvalState, fields : List[Field], exps : List[Exp]) : (Loc,List[Loc]) = {
+    // TODO: Parameterize this.
+    val oloc = ExpLoc(s.exp)
+    val fieldLocs = fields map (FieldLoc(_,oloc))
+    (oloc,fieldLocs)
+  }
+
 
 
   def nextContext (s : ApplyProcState) = AbstractCommon.MonoContext
@@ -1489,11 +1954,12 @@ class `0CFA_ANF` extends UniversalCFA_ANF {
   def nextContext (proc : Val, state : EvalAppState) = AbstractCommon.MonoContext
   def nextContext (kont : Kont, state : EvalState) = AbstractCommon.MonoContext
   def nextContext (state : ApplyKontState) = AbstractCommon.MonoContext
+  def nextContext (rec : AbstractCommon.Record, kont : Kont, state : EvalState) = AbstractCommon.MonoContext
 
 
 
   def explore (exp : Exp) {
-    val store0 = botStore + (HaltLoc,mkD(HaltKont))
+    val store0 = botStore + (HaltLoc,mkD(HaltKont(initMark)))
 
     val initState = EvalState(exp,botBEnv,store0,HaltLoc,AbstractCommon.MonoContext)
     explore(List(initState))
@@ -1521,7 +1987,22 @@ object HOFA {
 
   private var files : List[String] = List() 
 
+  private var useRangeBasedTouching = true
+  private var useAbstractGarbageCollection = true
+  private var wideningDegree : WideningDegree = NoWidening
+  private var useBindingEnvironmentRestriction = true
+  private var useMonoBindingEnvironment = false
+
   private def parseOptions (args : List[String]) : Unit = args match {
+    case "--gc" :: gcOptions :: rest => {
+      val gcOps = gcOptions.split(",")
+      this.useAbstractGarbageCollection = !gcOps.contains("off")
+      this.useRangeBasedTouching = !gcOps.contains("touch=free")
+
+      parseOptions(rest)
+    }
+    case "--widen" :: "perflat" :: rest => { wideningDegree = PerFlatWidening ; parseOptions(rest) }
+    case "--benv" :: "mono" :: rest => { this.useMonoBindingEnvironment = true ; parseOptions(rest) }
     case file :: rest => { files = file :: files ; parseOptions(rest) }
     case Nil => { files = files reverse }
   }
@@ -1529,12 +2010,15 @@ object HOFA {
   def main (args : Array[String]) {
     val argList = args.toList
 
-    val fileName = args(0)
+    parseOptions(argList)
+
+    val fileName = files(0)
     
     val source = scala.io.Source.fromFile(args(0)) mkString ""
 
     val sparser = new SParser
     val sxs = sparser.parse(source)    
+
     println("sxs:   " + sxs)
 
     val defs = sxs map LambdoSyntax.parseDef
@@ -1542,27 +2026,42 @@ object HOFA {
     val undefiner = new Undefiner 
     val anfXformer = new ANormalizer
     val cpsXformer = new CPSTransformer
+    val untailer = new org.ucombinator.project.lambdo.Untailer
 
     val dsexp = undefiner(defs)
-    println("dsexp: " + dsexp)
+    println("dsexp: " + dsexp + "\n")
 
-    val anexp = anfXformer(dsexp)    
-    println("anexp: " + anexp)
 
-    val cpexp = cpsXformer(anexp)
-    println("cpexp: " + cpexp)
+    val anexp = anfXformer(untailer(dsexp))
+    println("anexp: " + anexp + "\n")
+
+    //val cpexp = cpsXformer(anexp)
+    //println("cpexp: " + cpexp)
 
     //val cpcfa = new `0CFA_CPS` with GraphingTransitionSystem
     //cpcfa.explore(cpexp)
     //org.ucombinator.io.IO.writeTo("tmp/out.dot",cpcfa.toDot())
     //org.ucombinator.io.IO.writeTo("tmp/out.json",cpcfa.toJSON().toString())
 
-    val ancfa = new `0CFA_ANF` with GraphingTransitionSystem
-    ancfa.usePerFlatWidening = true
-    ancfa.useAbstractGarbageCollection = true
+    val ancfa = new `0CFA_ANF` with GraphingTransitionSystem with DependenceAnalysis
+
+    AbstractCommon.useRangeBasedTouching = this.useRangeBasedTouching
+    ancfa.wideningDegree = this.wideningDegree
+    ancfa.useAbstractGarbageCollection = this.useAbstractGarbageCollection
+    ancfa.useBindingEnvironmentRestriction = this.useBindingEnvironmentRestriction
+    ancfa.useMonoBindingEnvironment = this.useMonoBindingEnvironment
+
+    System.err.println("touch: " + AbstractCommon.useRangeBasedTouching)
+    System.err.println("widen: " + ancfa.wideningDegree)
+    System.err.println("gc:    " + ancfa.useAbstractGarbageCollection)
+    System.err.println("benvr: " + ancfa.useBindingEnvironmentRestriction)
+    System.err.println("monob: " + ancfa.useMonoBindingEnvironment)
+    System.err.println()
+
     ancfa.explore(anexp)
     println("steps: " + ancfa.steps)
     org.ucombinator.io.IO.writeTo("tmp/out.dot",ancfa.toDot())
+    org.ucombinator.io.IO.writeTo("tmp/dep.dot",ancfa.toDepDot())
     //org.ucombinator.io.IO.writeTo("tmp/out.json",ancfa.toJSON().toString())
     
     ()

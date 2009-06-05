@@ -368,3 +368,59 @@ trait TagOrdered[A <: TagOrdered[A]] extends Ordered[A] {
 
 
 
+object TotalOrder {
+  def compare [A <: Ordered[C], B <: Ordered[D],C,D] (a1 : A, b1 : B) (a2 : C, b2 : D) : Int = {
+    val c1 = a1 compare a2
+    if (c1 != 0)
+      return c1
+    b1 compare b2
+  }
+
+
+  def compare[K <% Ordered[K]] (s1 : scala.collection.immutable.SortedSet[K]) (s2 : scala.collection.immutable.SortedSet[K]) : Int = {
+    // CHECK_HERE
+    // BUG/WARNING: This assumes toList returns a list ordered by key.
+
+    for ((k1,k2) <- s1.toList zip s2.toList) {
+      val c = k1 compare k2
+      if (c != 0)
+        return c
+    }
+
+    val csize = s1.size - s2.size
+    if (csize != 0)
+      return csize
+
+    return 0
+  }
+
+
+  def compare[K <% Ordered[K],V <: Ordered[V]] (m1 : scala.collection.immutable.SortedMap[K,V]) (m2 : scala.collection.immutable.SortedMap[K,V]) : Int = {
+    // CHECK_HERE
+    // BUG/WARNING: This assumes toList returns a list ordered by key.
+
+    for (((k1,v1),(k2,v2)) <- m1.toList zip m2.toList) {
+      val ck = k1 compare k2
+      if (ck != 0)
+        return ck
+      
+      val cv = v1 compare v2
+      if (cv != 0)
+        return cv
+    }
+
+    // Check if one is larger than the other.
+    val csize = m1.size - m2.size
+    if (csize != 0)
+      return csize 
+
+
+    return 0
+  }
+  
+
+  /**
+   Casts an object into an order.
+   */
+  def orderIdentity[A] (a : A) : Ordered[A] = a.asInstanceOf[Ordered[A]]
+}

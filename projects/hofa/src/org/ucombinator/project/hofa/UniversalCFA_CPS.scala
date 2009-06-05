@@ -123,7 +123,7 @@ abstract class UniversalCFA_CPS extends UniversalCFAFramework {
 
   /* Satisfying MonotoneTransitionSystem requirements. */
   type C = ListSharpCache[S]
-  protected def makeC(init : S) = new ListSharpCache[S](usePerFlatWidening)
+  protected def makeC(init : S) = new ListSharpCache[S](wideningDegree == PerFlatWidening)
 
   def fuse (flat : F, sharp : S) : N = flat match {
     case EvalFlat(call,bEnv,k) => EvalState(call, bEnv, sharp.store, k)
