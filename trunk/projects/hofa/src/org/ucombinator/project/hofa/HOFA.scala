@@ -27,6 +27,11 @@ object AbstractCommon {
     def orderTag = this.getClass().getName()
     def localCompare (loc2 : Loc) : Int ;
 
+    /**
+     Answers whether this abstract location represents only one concrete location by definition.
+     */
+    def isSingleton : Boolean ;
+
     override def hashCode() : Int = throw new Exception("hashCode method undefined in " + this.getClass().getName())
     override def equals (that : Any) : Boolean = (this compare (that.asInstanceOf[Loc])) == 0
       //throw new Exception("equals method undefined in " + this.getClass().getName())
@@ -42,20 +47,22 @@ object AbstractCommon {
   }
 
   case object HaltLoc extends Loc with LocallySingletonOrdered[Loc] {
+    def isSingleton = true
+
     override val hashCode : Int = 23 ;
     override def toJSON() : JSONExp = JSONSyntax.S("HaltLoc")
   }
 
+  /**
+   A VarLoc object is designed to represent all of the addresses to
+   which a particular variable may be bound.
+   */
   case class VarLoc(val variable : Var) extends Loc {
+    def isSingleton = false
+
     def localCompare (that : Loc) = this.variable compare that.asInstanceOf[VarLoc].variable
     
     override lazy val hashCode : Int = variable.hashCode()
-    /*
-    override def equals (that : Any) = that match {
-      case VarLoc(v2) => variable equals v2
-      case _ => false
-    }
-    */
 
     def toJSON() : JSONExp = {
       import JSONSyntax._
@@ -63,16 +70,17 @@ object AbstractCommon {
     }
   }
 
+
+  /**
+   An ExpLoc object associates an abstract address with an expression.
+
+   What it represents depends on the implementation and its use.
+   */
   case class ExpLoc(val exp : Exp) extends Loc {
+    def isSingleton = false
     def localCompare (that : Loc) = this.exp compare that.asInstanceOf[ExpLoc].exp
     
     override lazy val hashCode : Int = exp.hashCode()
-    /*
-    override def equals (that : Any) = that match {
-      case ExpLoc(exp2) => exp equals exp2
-      case _ => false
-    }
-    */
 
     def toJSON() : JSONExp = {
       import JSONSyntax._
@@ -85,6 +93,8 @@ object AbstractCommon {
    A FieldLoc object represents a memory location for the field of an object.
    */
   case class FieldLoc(field : Field, oLoc : Loc) extends Loc {
+    def isSingleton = oLoc.isSingleton
+
     def localCompare (that : Loc) : Int = that match {
       case FieldLoc(field2,oLoc2) => 
         TotalOrder.compare[Field,Loc,org.ucombinator.languages.SyntaxNode,Loc] (field,oLoc) (field2,oLoc2)
@@ -105,17 +115,13 @@ object AbstractCommon {
 
 
   case class NatLoc (n : Int) extends Loc {
+    def isSingleton = true
+
     def localCompare (l2 : Loc) : Int = l2 match {
       case NatLoc(n2) => n compare n2
     }
 
-    override val hashCode = n
-    /*
-    override def equals(o : Any) = o match {
-      case NatLoc(n2) => n == n2
-      case _ => false
-    }
-    */
+    override def hashCode = n
 
     def toJSON() : JSONExp = {
       import JSONSyntax._
@@ -459,8 +465,6 @@ object AbstractCommon {
 
   
 
-
-
   
   implicit def scalaToLambdo(b : Boolean) : Bas = 
     if (b) {
@@ -501,6 +505,26 @@ object AbstractCommon {
     }
   }
   
+  def mustBeTrue(d : D) : Boolean = {
+    for (v <- d.elements) {
+      if (v eq FalseVal)
+        return false
+    }
+    // BUG: What if d is empty?
+    return true
+  }
+
+  def mustBeFalse(d : D) : Boolean = {
+    if (d.size != 1)
+      return false
+
+    for (v <- d.elements) {
+      if (v eq FalseVal)
+        return true
+    }
+
+    return false
+  }
   
   private case class StoreEntry (val loc : Loc, value : Val) {
     override lazy val hashCode : Int = {
@@ -673,12 +697,52 @@ object AbstractCommon {
     def apply(l : Loc) : D ;
     def get (l : Loc) : Option[D] ;
     def getOrElse (l : Loc, dflt : D) : D ;
-    
+
+    /**
+     Adds a location-value pair to the store.
+
+     If the location already exists, then its current value is joined with its new value.
+
+     Used when the address being added has been freshly allocated.
+    */    
     def + (l : Loc, d : D) : Store ;
+
+
+    /**
+     Adds several location-value pairs to the store.
+     */
     def ++ (lds : Iterable[(Loc,D)]) : Store ;
     def join (s2 : Store) : Store ;
 
+
+    /**
+     Forcibly overwrites a location in the store with the new value.  
+
+     The old value is discarded.
+
+     <b>Warning</b>: This method can lead to unsoundness if not used properly.  
+        Use weakUpdate in the absence of a soundness proof.
+     <p>
+     See: Might and Shivers. Exploiting reachability and cardinality in abstract interpretation.  Journal of Functional Programming.  2008.
+     </p>
+     */  
     def strongUpdate(l : Loc, d : D) : Store ;
+
+
+
+    /**
+     Updates a location in the store with a join of the new and old values for that location.
+     */
+    def weakUpdate(l : Loc, d : D) : Store ;
+
+
+    /**
+     Updates a location with a new value.
+
+     The update should be strong if the store has enough information to prove that it is sound, and weak otherwise.
+     */
+    def update(l : Loc, d : D) : Store ;
+
     
     def isSubsumedBy(s2 : Store) : Boolean ;
     def toList : List[(Loc,D)]
@@ -796,14 +860,15 @@ object StandardDomains {
   val botBEnv = new StdBEnv(new TreeMap[Var,Loc]()(LambdoSyntax.varToOrdered _))
 
 
-  class StdStore(val map : TreeMap[Loc,D], val hash : StoreHash) extends Store {
+
+  class StdStore(val map : TreeMap[Loc,D]) extends Store {
     lazy val toList = map.toList
 
     def apply(l : Loc) = map(l)
     def get (l : Loc) : Option[D] = map.get(l)
     def getOrElse (l : Loc, dflt : D) : D = map.getOrElse(l,dflt) 
 
-    private def isSubsumedBy_iterative (that : Store) : Boolean = {
+    def isSubsumedBy (that : Store) : Boolean = {
       for ((l1,d1) <- map) {
         that get l1 match {
           case Some (d2) => if (!(d1 isSubsumedBy d2)) return false
@@ -812,27 +877,11 @@ object StandardDomains {
       }
       return true      
     }
-    
-
-    def isSubsumedBy(otherStore : Store) : Boolean = {
-      if (otherStore.isInstanceOf[StdStore]) {
-        val that = otherStore.asInstanceOf[StdStore]
-        val result = this.hash isWeakerThan that.hash
-        if (HOFA.sanityChecking) {
-          val result2 = isSubsumedBy_iterative(otherStore)
-          if (result != result2)
-            throw new Exception("Sanity check failed ("+result+"/"+result2+")\n" + this + "\n\n v.\n\n" + otherStore)
-        }
-        return result
-      }
-
-      isSubsumedBy_iterative(otherStore)
-    }
 
     def + (loc : Loc, d : D) : Store = {
       map get loc match {
-        case Some(d2) => new StdStore(map(loc) = d join d2, hash join (loc,d))
-        case None => new StdStore(map(loc) = d, hash join (loc,d))
+        case Some(d2) => new StdStore(map(loc) = d join d2)
+        case None => new StdStore(map(loc) = d)
       }
     }
     
@@ -852,7 +901,24 @@ object StandardDomains {
     def strongUpdate(l : Loc, d : D) : Store = {
       val newMap = (map - l)(l) = d
       
-      new StdStore(newMap,ArrayStoreHash(newMap))
+      new StdStore(newMap)
+    }
+
+    def weakUpdate(l : Loc, d : D) : Store = {
+      // We don't track cardinalities in this very basic store
+      // implemenation, so we can use addition.
+
+      // If we tracked cardinalities, we'd keep cardinality info the
+      // same, but still update the value.
+      this + (l,d)
+    }
+
+    def update(l : Loc, d : D)  : Store = {
+      if (l.isSingleton) {
+        strongUpdate(l,d)
+      } else {
+        weakUpdate(l,d)
+      }
     }
 
     override lazy val hashCode : Int = map.foldRight (0) { case ((loc,d),hash) => loc.hashCode() + d.hashCode() + 2*hash }
@@ -861,7 +927,7 @@ object StandardDomains {
     override def toString = map.toString
   }
 
-  val botStore = new StdStore(new TreeMap[Loc,D],ArrayStoreHash())
+  val botStore = new StdStore(new TreeMap[Loc,D])
 
 
 
@@ -899,6 +965,98 @@ object StandardDomains {
 
 }
 
+
+
+object HashingDomains {
+
+  import AbstractCommon._
+  import LambdoSyntax.Var
+
+  class ArrayHashingStore(val map : TreeMap[Loc,D], val hash : StoreHash) extends Store {
+    lazy val toList = map.toList
+
+    def apply(l : Loc) = map(l)
+    def get (l : Loc) : Option[D] = map.get(l)
+    def getOrElse (l : Loc, dflt : D) : D = map.getOrElse(l,dflt) 
+
+    private def isSubsumedBy_iterative (that : Store) : Boolean = {
+      for ((l1,d1) <- map) {
+        that get l1 match {
+          case Some (d2) => if (!(d1 isSubsumedBy d2)) return false
+          case None => return false
+        }
+      }
+      return true      
+    }
+    
+
+    def isSubsumedBy(otherStore : Store) : Boolean = {
+      if (otherStore.isInstanceOf[ArrayHashingStore]) {
+        val that = otherStore.asInstanceOf[ArrayHashingStore]
+        val result = this.hash isWeakerThan that.hash
+        if (HOFA.sanityChecking) {
+          val result2 = isSubsumedBy_iterative(otherStore)
+          if (result != result2)
+            throw new Exception("Sanity check failed ("+result+"/"+result2+")\n" + this + "\n\n v.\n\n" + otherStore)
+        }
+        return result
+      }
+
+      isSubsumedBy_iterative(otherStore)
+    }
+
+    def + (loc : Loc, d : D) : Store = {
+      map get loc match {
+        case Some(d2) => new ArrayHashingStore(map(loc) = d join d2, hash join (loc,d))
+        case None => new ArrayHashingStore(map(loc) = d, hash join (loc,d))
+      }
+    }
+    
+    def ++ (lds : Iterable[(Loc,D)]) : Store = {
+      var cur : Store = this
+      for ((l,d) <- lds) {
+        cur = cur + (l,d)
+      }
+      cur
+    }
+
+    def join (otherStore : Store) : Store = {
+      val s2 = otherStore.asInstanceOf[ArrayHashingStore]
+      s2 ++ map
+    }
+
+    def strongUpdate(l : Loc, d : D) : Store = {
+      val newMap = (map - l)(l) = d
+      
+      new ArrayHashingStore(newMap,ArrayStoreHash(newMap))
+    }
+
+    def weakUpdate(l : Loc, d : D) : Store = {
+      // We don't track cardinalities in this very basic store
+      // implemenation, so we can use addition.
+
+      // If we tracked cardinalities, we'd keep cardinality info the
+      // same, but still update the value.
+      this + (l,d)
+    }
+
+    def update(l : Loc, d : D)  : Store = {
+      if (l.isSingleton) {
+        strongUpdate(l,d)
+      } else {
+        weakUpdate(l,d)
+      }
+    }
+
+    override lazy val hashCode : Int = map.foldRight (0) { case ((loc,d),hash) => loc.hashCode() + d.hashCode() + 2*hash }
+    override def equals(a : Any) : Boolean = map equals a.asInstanceOf[ArrayHashingStore].map
+
+    override def toString = map.toString
+  }
+
+  val botStore = new ArrayHashingStore(new TreeMap[Loc,D],ArrayStoreHash())  
+  
+}
 
 
 
@@ -952,7 +1110,7 @@ abstract class UniversalCFAFramework extends MonotoneTransitionSystem {
     case (PPrimOp("odd?"),_) => mkD(TrueVal,FalseVal)
     case (PPrimOp("even?"),_) => mkD(TrueVal,FalseVal) 
 
-    case _ => throw new Exception("unknown primop: " + p)
+    case _ => throw new Exception("unknown primop: " + p + ", with arguments: " + argVals)
   }
 
 
@@ -1564,17 +1722,25 @@ abstract class UniversalCFA_ANF extends UniversalCFAFramework {
     }
 
     case s @ EvalState(If(cond,ifTrue,ifFalse),bEnv,store,kontp,k) => {
+      val condd = atomEval (bEnv,store) (cond)
       val kTrue = nextContext(true,s)
       val kFalse = nextContext(false,s)
-      List(EvalState(ifTrue,bEnv,store,kontp,kTrue),
-           EvalState(ifFalse,bEnv,store,kontp,kFalse))
+
+      if (mustBeTrue(condd)) {
+        List(EvalState(ifTrue,bEnv,store,kontp,kTrue))
+      } else if (mustBeFalse(condd)) {
+        List(EvalState(ifFalse,bEnv,store,kontp,kFalse))
+      } else {
+        List(EvalState(ifTrue,bEnv,store,kontp,kTrue),
+             EvalState(ifFalse,bEnv,store,kontp,kFalse))
+      }
     }
 
     case s @ EvalState(Set(v,e,body),bEnv,store,kontp,k) => {
       val k_ = nextContext(s)
       val argVal = atomEval (bEnv,store) (e)
       val addr = bEnv(v)
-      val store_ = store + (addr,argVal)
+      val store_ = (store(addr) = argVal) // strongUpdate if possible.
       List(EvalState(body,bEnv,store_,kontp,k_))
     }
 
@@ -1886,8 +2052,14 @@ trait GraphingTransitionSystem extends TransitionSystem {
   def toJSON() : JSONExp = {
     import JSONSyntax._
     
+    var idx = scala.collection.immutable.TreeMap[String,JSONExp]()
+
+    for ((k,v) <- index) {
+      idx = (idx(k.toString()) = v.asInstanceOf[JSONable].toJSON())
+    }
+
     O(Map(
-      "index" -> JSON(index)
+      "index" -> O(idx)
     ))
   }
 }
@@ -1906,9 +2078,10 @@ class `0CFA_ANF` extends UniversalCFA_ANF {
   import AbstractCommon._
 
   var useMonoBindingEnvironment = false
+  var useHashingStore = true
 
   def botBEnv = if (useMonoBindingEnvironment) { StandardDomains.MonoBEnv } else { StandardDomains.botBEnv }
-  def botStore = StandardDomains.botStore
+  def botStore = if (useHashingStore) { HashingDomains.botStore } else { StandardDomains.botStore }
   def botD = StandardDomains.botD
 
   def initMark = EmptyCallMark
@@ -1977,6 +2150,150 @@ class `0CFA_ANF` extends UniversalCFA_ANF {
 
 
 
+/**
+ An implementation of the <b>concrete interpreter</b> as a static analysis, based on the notion of Galois unions.
+ */
+class Concrete_ANF extends UniversalCFA_ANF {
+
+  import LambdoSyntax._
+  import AbstractCommon._
+
+
+  def botBEnv = StandardDomains.botBEnv
+  def botStore = StandardDomains.botStore
+  def botD = StandardDomains.botD
+
+  def initMark = EmptyCallMark
+  
+  override def mark (proc : Val, state : AbstractState) (kont : Kont) : Kont = {
+    proc match {
+      case Clo(lam,be) => kont.mark = (kont.mark.asInstanceOf[CallMark] + MonoProcCall(lam))
+      case _ => kont
+    }
+  }
+
+  type K = AbstractCommon.Context
+
+  private var maxLoc = 0
+
+  private def alloc() : Loc = {
+    maxLoc = maxLoc + 1
+    NatLoc(maxLoc)
+  }
+
+
+  def alloc (vars : List[Var], state : ApplyProcState) : List[Loc] =
+    vars map (_ => alloc())
+  def alloc (vars : List[Var], state : EvalState) : List[Loc] =
+    vars map (_ => alloc())
+  def alloc (v : Var, state : EvalState) : Loc =
+    alloc()
+  def alloc (proc : Val, state : EvalAppState) : Loc = proc match {
+    case Clo(lam,bEnv) => alloc()
+    case Op(prim) => alloc()
+  }
+  def alloc (exp : Exp, state : EvalState) : Loc = 
+    alloc()
+  def alloc (v : Var, state : ApplyKontState) : Loc = 
+    alloc()
+
+  def allocNew (kont : Kont, s : EvalState, fields : List[Field], exps : List[Exp]) : (Loc,List[Loc]) = {
+    // TODO: Parameterize this.
+    val oloc = alloc()
+    val fieldLocs = fields map (FieldLoc(_,oloc))
+    (oloc,fieldLocs)
+  }
+
+
+  def nextContext (s : ApplyProcState) = AbstractCommon.MonoContext
+  def nextContext (kont : Kont, s : ApplyProcState) = AbstractCommon.MonoContext
+  def nextContext (proc : Val, s : EvalState) = AbstractCommon.MonoContext
+  def nextContext (s : EvalState) = AbstractCommon.MonoContext
+  def nextContext (cond : Boolean, s : EvalState) = AbstractCommon.MonoContext
+  def nextContext (proc : Val, state : EvalAppState) = AbstractCommon.MonoContext
+  def nextContext (kont : Kont, state : EvalState) = AbstractCommon.MonoContext
+  def nextContext (state : ApplyKontState) = AbstractCommon.MonoContext
+  def nextContext (rec : AbstractCommon.Record, kont : Kont, state : EvalState) = AbstractCommon.MonoContext
+
+
+  /**
+   Evaluates a literal expression exactly.
+   */
+  override def litEval (exp : LitExp) : D = exp match {
+    case IntLit(z) => mkD(ExactInt(z))
+    case VoidLit() => mkD(VoidVal)
+    case BoolLit(true) => mkD(TrueVal)
+    case BoolLit(false) => mkD(FalseVal)
+    case NilLit() => mkD(NilVal)
+    case TextLit(_) => mkD(StringVal)
+  }
+
+
+  private val randomNumberGenerator = new java.util.Random
+
+  /**
+   Evaluates a primitive operation exactly.
+   */
+  override def primEval (p : PPrimOp, argVals : List[D]) : D = (p,argVals) match {
+    case (PPrimOp("+"),List(DSingle(ExactInt(z1)),DSingle(ExactInt(z2)))) => mkD(ExactInt(z1 + z2))
+    case (PPrimOp("-"),List(DSingle(ExactInt(z1)),DSingle(ExactInt(z2)))) => mkD(ExactInt(z1 - z2))
+    case (PPrimOp("*"),List(DSingle(ExactInt(z1)),DSingle(ExactInt(z2)))) => mkD(ExactInt(z1 * z2))
+    case (PPrimOp("/"),List(DSingle(ExactInt(z1)),DSingle(ExactInt(z2)))) => mkD(ExactInt(z1 / z2))
+    case (PPrimOp("="),List(DSingle(ExactInt(z1)),DSingle(ExactInt(z2)))) => mkD(z1 equals z2)
+    case (PPrimOp("<"),List(DSingle(ExactInt(z1)),DSingle(ExactInt(z2)))) => mkD(z1 < z2)
+    case (PPrimOp("<="),List(DSingle(ExactInt(z1)),DSingle(ExactInt(z2)))) => mkD(z1 <= z2)
+    case (PPrimOp(">"),List(DSingle(ExactInt(z1)),DSingle(ExactInt(z2)))) => mkD(z1 > z2)
+    case (PPrimOp("modulo"),List(DSingle(ExactInt(z1)),DSingle(ExactInt(z2)))) => mkD(ExactInt(z1 mod z2))
+    case (PPrimOp("quotient"),List(DSingle(ExactInt(z1)),DSingle(ExactInt(z2)))) => mkD(ExactInt(z1 / z2))
+    case (PPrimOp("gcd"),List(DSingle(ExactInt(z1)),DSingle(ExactInt(z2)))) => mkD(ExactInt(z1.gcd(z2)))
+    case (PPrimOp("random-range"),List(DSingle(ExactInt(lo)),DSingle(ExactInt(hi)))) =>
+      mkD(ExactInt((BigDecimal(hi-lo) * BigDecimal(Math.random) + BigDecimal(lo)).toBigInt))
+    case (PPrimOp("random-byte"),List()) => mkD(ExactInt(randomNumberGenerator.nextInt().abs % 256))
+    case (PPrimOp("not"),List(DSingle(FalseVal))) => mkD(TrueVal)
+    case (PPrimOp("not"),List(DSingle(_))) => mkD(FalseVal)
+    case (PPrimOp("odd?"),List(DSingle(ExactInt(z)))) => mkD((z mod 2) == 1)
+    case (PPrimOp("even?"),List(DSingle(ExactInt(z)))) => mkD((z mod 2) == 0)
+
+    case _ => throw new Exception("unknown primop: " + p + ", with arguments: " + argVals)
+  }
+
+  
+
+  def explore (exp : Exp) {
+    val store0 = botStore + (HaltLoc,mkD(HaltKont(initMark)))
+
+    val initState = EvalState(exp,botBEnv,store0,HaltLoc,AbstractCommon.MonoContext)
+    explore(List(initState))
+  }
+
+
+  override def mark(state : N) {} // Don't store states.
+  override def seen(state : N) : Option[N] = None // Don't check for states.
+  override def widen(state : N) : N = state // Don't widen states.
+  override def narrow(state : N) : N = state // Don't narrow states.
+
+  override def recordTransition(state : N, next : List[N]) {
+    
+    // println("\nsteps: " + steps)
+    // println("state: " + state)  
+
+    state match {
+      case s @ ApplyKontState(HaltKont(mark), answers, store, k) => {
+        println(answers)
+      }
+      case _ => {}
+    }
+
+    super.recordTransition(state,next)
+  }
+
+}
+
+
+
+
+
+
 
 /**
  The HOFA object contains a high-level interface to the higher-order flow analysis engine.
@@ -1985,6 +2302,12 @@ object HOFA {
 
   var sanityChecking = false
 
+  trait Analysis
+  case object DependenceAnalysis extends Analysis
+  case object ControlFlowAnalysis extends Analysis
+  case object ConcreteAnalysis extends Analysis
+
+  private var analyses : List[Analysis] = List()
   private var files : List[String] = List() 
 
   private var useRangeBasedTouching = true
@@ -1992,6 +2315,7 @@ object HOFA {
   private var wideningDegree : WideningDegree = NoWidening
   private var useBindingEnvironmentRestriction = true
   private var useMonoBindingEnvironment = false
+  private var useHashingStore = true
 
   private def parseOptions (args : List[String]) : Unit = args match {
     case "--gc" :: gcOptions :: rest => {
@@ -2001,20 +2325,64 @@ object HOFA {
 
       parseOptions(rest)
     }
-    case "--widen" :: "perflat" :: rest => { wideningDegree = PerFlatWidening ; parseOptions(rest) }
-    case "--benv" :: "mono" :: rest => { this.useMonoBindingEnvironment = true ; parseOptions(rest) }
-    case file :: rest => { files = file :: files ; parseOptions(rest) }
+
+    case "--concrete" :: rest => {
+      analyses = ConcreteAnalysis :: analyses ;
+      parseOptions(rest) 
+    }
+    case "--deps" :: rest => {
+      analyses = DependenceAnalysis :: analyses ;
+      parseOptions(rest) 
+    }
+
+    case "--widen" :: "perflat" :: rest => {
+      wideningDegree = PerFlatWidening ; 
+      parseOptions(rest) 
+    }
+
+    case "--benv" :: "mono" :: rest => {
+      this.useMonoBindingEnvironment = true ;
+      parseOptions(rest) 
+    }
+    case "--store" :: "hash" :: rest => {
+      this.useHashingStore = true ;
+      parseOptions(rest) 
+    }
+    case "--store" :: "map" :: rest => { 
+      this.useHashingStore = false ; 
+      parseOptions(rest) 
+    }
+
+    case file :: rest => { 
+      files = file :: files ; 
+      parseOptions(rest) 
+    }
+
     case Nil => { files = files reverse }
   }
 
   def main (args : Array[String]) {
+    
+    // This whole class needs major clean-up.  We need a good
+    // architecture for sorting through all of the possible
+    // parameters.  Right now, it's all ad-hoc.
+
     val argList = args.toList
+
+    println("args: " + argList)
 
     parseOptions(argList)
 
+    println("files: " + files)
+
+    if (analyses isEmpty) {
+      analyses = List(ControlFlowAnalysis)
+    }
+
+    // BUG/TODO: Support more than one source file.
     val fileName = files(0)
     
-    val source = scala.io.Source.fromFile(args(0)) mkString ""
+    val source = scala.io.Source.fromFile(fileName) mkString ""
 
     val sparser = new SParser
     val sxs = sparser.parse(source)    
@@ -2031,39 +2399,65 @@ object HOFA {
     val dsexp = undefiner(defs)
     println("dsexp: " + dsexp + "\n")
 
+    var exp = dsexp
 
-    val anexp = anfXformer(untailer(dsexp))
-    println("anexp: " + anexp + "\n")
+    if (analyses contains DependenceAnalysis)
+      exp = untailer(exp)
 
-    //val cpexp = cpsXformer(anexp)
-    //println("cpexp: " + cpexp)
+    if (true)
+      exp = anfXformer(exp)
 
-    //val cpcfa = new `0CFA_CPS` with GraphingTransitionSystem
-    //cpcfa.explore(cpexp)
-    //org.ucombinator.io.IO.writeTo("tmp/out.dot",cpcfa.toDot())
-    //org.ucombinator.io.IO.writeTo("tmp/out.json",cpcfa.toJSON().toString())
+    // CPS-based CFA:
+    if (false) {
+      exp = cpsXformer(exp)
+      println("cpexp: " + exp)
 
-    val ancfa = new `0CFA_ANF` with GraphingTransitionSystem with DependenceAnalysis
+      val cpcfa = new `0CFA_CPS` with GraphingTransitionSystem
+      cpcfa.explore(exp)
+      org.ucombinator.io.IO.writeTo("tmp/out.dot",cpcfa.toDot())
+      org.ucombinator.io.IO.writeTo("tmp/out.json",cpcfa.toJSON().toString())
+    }
 
-    AbstractCommon.useRangeBasedTouching = this.useRangeBasedTouching
-    ancfa.wideningDegree = this.wideningDegree
-    ancfa.useAbstractGarbageCollection = this.useAbstractGarbageCollection
-    ancfa.useBindingEnvironmentRestriction = this.useBindingEnvironmentRestriction
-    ancfa.useMonoBindingEnvironment = this.useMonoBindingEnvironment
+    // Use the abstract interpreter as a concrete interpreter:
+    if (analyses.contains(ConcreteAnalysis)) {
+      val interp = new Concrete_ANF
+      interp.explore(exp)
+    }
 
-    System.err.println("touch: " + AbstractCommon.useRangeBasedTouching)
-    System.err.println("widen: " + ancfa.wideningDegree)
-    System.err.println("gc:    " + ancfa.useAbstractGarbageCollection)
-    System.err.println("benvr: " + ancfa.useBindingEnvironmentRestriction)
-    System.err.println("monob: " + ancfa.useMonoBindingEnvironment)
-    System.err.println()
 
-    ancfa.explore(anexp)
-    println("steps: " + ancfa.steps)
-    org.ucombinator.io.IO.writeTo("tmp/out.dot",ancfa.toDot())
-    org.ucombinator.io.IO.writeTo("tmp/dep.dot",ancfa.toDepDot())
-    //org.ucombinator.io.IO.writeTo("tmp/out.json",ancfa.toJSON().toString())
-    
+    // Find interprocedural dependences:
+    if (analyses.contains(DependenceAnalysis)) {
+      val ancfa = new `0CFA_ANF` with GraphingTransitionSystem with DependenceAnalysis
+      
+      AbstractCommon.useRangeBasedTouching = this.useRangeBasedTouching
+      ancfa.wideningDegree = this.wideningDegree
+      ancfa.useAbstractGarbageCollection = this.useAbstractGarbageCollection
+      ancfa.useBindingEnvironmentRestriction = this.useBindingEnvironmentRestriction
+      ancfa.useMonoBindingEnvironment = this.useMonoBindingEnvironment
+      ancfa.useHashingStore = this.useHashingStore
+      
+      System.err.println("touch: " + AbstractCommon.useRangeBasedTouching)
+      System.err.println("widen: " + ancfa.wideningDegree)
+      System.err.println("gc:    " + ancfa.useAbstractGarbageCollection)
+      System.err.println("benvr: " + ancfa.useBindingEnvironmentRestriction)
+      System.err.println("monob: " + ancfa.useMonoBindingEnvironment)
+      System.err.println()
+      
+      ancfa.explore(exp)
+      println("steps: " + ancfa.steps)
+      //println("done!")
+      //org.ucombinator.io.IO.writeTo("tmp/out.dot",ancfa.toDot())
+      //println("finished: out.dot")
+      org.ucombinator.io.IO.writeTo("tmp/dep.dot",ancfa.toDepDot())
+      //println("finished: dep.dot")
+      //val json = ancfa.toJSON()
+      //println("finished: json")
+      //val str = json.toString()
+      //println("finished: json.toString()")
+      //org.ucombinator.io.IO.writeTo("tmp/out.json",str)
+      //println("finished: out.json")
+    }
+      
     ()
   }
 
