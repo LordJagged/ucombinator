@@ -61,7 +61,7 @@ $(DOCINDEX): $(SCALA_FILES)
 
 $(BIN)/hofa.run: Makefile
 	@echo Creating hofa.run script...
-	@echo $(SCALA_BIGMEM) org.ucombinator.project.hofa.\$$1 \$$2* > bin/hofa.run
+	@echo $(SCALA_BIGMEM) org.ucombinator.project.hofa.\$$1 \$$2 \$$3 \$$4 \$$5 \$$6 \$$7 \$$8 \$$9 > bin/hofa.run
 	@chmod u+x $(BIN)/hofa.run
 
 
